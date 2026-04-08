@@ -1,5 +1,7 @@
 # API Relay Audit
 
+by [@li9292](https://x.com/li9292)
+
 Security audit tool for third-party AI API relay/proxy services. Detects hidden prompt injection, prompt leakage, instruction override, and context truncation.
 
 ## 7-Step Audit
@@ -104,6 +106,10 @@ All three options share the same CLI interface:
 | LOW | No injection + instructions work + full context | Safe to use |
 | MEDIUM | Minor injection (<100 tokens) or prompt extractable | OK for simple tasks |
 | HIGH | Injection >500 tokens or instructions overridden | Not recommended |
+
+## Author
+
+[@li9292](https://x.com/li9292)
 
 ## License
 
