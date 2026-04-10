@@ -94,6 +94,146 @@ def _parse_curl_i_output(output: str) -> dict:
     }
 
 
+# ============================================================
+# Section 1a: Stream integrity signals (Step 10 helper, v1.7)
+# ============================================================
+#
+# Concept inspired by hvoy.ai zzsting88/relayAPI claude_detector.py
+# StreamSignals (verified 2026-04-11). Clean-room reimplementation;
+# field names overlap because they describe Anthropic's SSE schema
+# which is not copyrightable. See reference_hvoy_relayapi memory.
+
+KNOWN_SSE_EVENT_TYPES = frozenset({
+    "ping",
+    "message_start",
+    "content_block_start",
+    "content_block_delta",
+    "content_block_stop",
+    "message_delta",
+    "message_stop",
+})
+
+
+class StreamSignals:
+    """Captures what a streaming Anthropic response looked like at the
+    SSE event layer. Populated by ``APIClient.stream_call`` during the
+    request; consumed by ``analyze_stream`` (Sub-PR 2) afterwards.
+
+    Plain class instead of dataclass because standalone audit.py keeps
+    its dependency surface minimal; functionality is identical to the
+    modular ``api_relay_audit.stream_integrity.StreamSignals`` dataclass.
+    """
+    def __init__(self):
+        self.event_types = []
+        self.content_block_types = []
+        self.delta_types = []
+        self.has_message_start = False
+        self.has_content_block_start = False
+        self.has_content_block_delta = False
+        self.has_message_delta = False
+        self.has_message_stop = False
+        self.has_text_delta = False
+        self.thinking_start_seen = False
+        self.thinking_delta_seen = False
+        self.message_start_model = None
+        self.input_tokens = None
+        self.message_delta_input_tokens_samples = []
+        self.output_tokens_samples = []
+        self.empty_signature_delta_count = 0
+        self.transport_error = None
+        self.total_duration_seconds = None
+        self.raw_event_count = 0
+
+
+def _populate_stream_signals(event, signals):
+    """Dispatch a parsed SSE event dict into a StreamSignals in place."""
+    signals.raw_event_count += 1
+    event_type = event.get("type", "")
+    if isinstance(event_type, str) and event_type:
+        signals.event_types.append(event_type)
+
+    if event_type == "message_start":
+        signals.has_message_start = True
+        message = event.get("message", {})
+        if isinstance(message, dict):
+            model_name = message.get("model")
+            if isinstance(model_name, str):
+                signals.message_start_model = model_name
+            usage = message.get("usage", {})
+            if isinstance(usage, dict):
+                input_tokens = usage.get("input_tokens")
+                if isinstance(input_tokens, int):
+                    signals.input_tokens = input_tokens
+
+    elif event_type == "content_block_start":
+        signals.has_content_block_start = True
+        block = event.get("content_block", {})
+        if isinstance(block, dict):
+            block_type = block.get("type", "")
+            if isinstance(block_type, str) and block_type:
+                signals.content_block_types.append(block_type)
+            if block.get("type") == "thinking":
+                signals.thinking_start_seen = True
+
+    elif event_type == "content_block_delta":
+        signals.has_content_block_delta = True
+        delta = event.get("delta", {})
+        if isinstance(delta, dict):
+            delta_type = delta.get("type")
+            if isinstance(delta_type, str) and delta_type:
+                signals.delta_types.append(delta_type)
+            if delta_type == "text_delta":
+                signals.has_text_delta = True
+            elif delta_type == "thinking_delta":
+                signals.thinking_delta_seen = True
+            elif delta_type == "signature_delta":
+                signature = delta.get("signature")
+                if isinstance(signature, str) and not signature.strip():
+                    signals.empty_signature_delta_count += 1
+
+    elif event_type == "message_delta":
+        signals.has_message_delta = True
+        usage = event.get("usage", {})
+        if isinstance(usage, dict):
+            input_tokens = usage.get("input_tokens")
+            if isinstance(input_tokens, int):
+                signals.message_delta_input_tokens_samples.append(input_tokens)
+            output_tokens = usage.get("output_tokens")
+            if isinstance(output_tokens, int):
+                signals.output_tokens_samples.append(output_tokens)
+
+    elif event_type == "message_stop":
+        signals.has_message_stop = True
+
+
+def _parse_sse_stream(byte_iterator, signals):
+    """Consume a byte iterator and populate signals with every SSE event.
+
+    Handles partial chunks, multi-event chunks, [DONE] termination,
+    and malformed JSON lines. Never raises.
+    """
+    buffer = ""
+    for chunk in byte_iterator:
+        if isinstance(chunk, (bytes, bytearray)):
+            buffer += chunk.decode("utf-8", errors="ignore")
+        else:
+            buffer += chunk
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            line = line.strip()
+            if not line.startswith("data: "):
+                continue
+            data = line[6:]
+            if data == "[DONE]":
+                return
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                _populate_stream_signals(event, signals)
+
+
 class APIClient:
     """Unified API client that auto-detects Anthropic vs OpenAI format.
 
@@ -330,6 +470,100 @@ class APIClient:
             return _parse_curl_i_output(output)
         except Exception as e:
             return {"status": 0, "headers": {}, "body": "", "error": str(e)}
+
+    # -- Streaming (Step 10 stream integrity, v1.7) --------------------------
+
+    def stream_call(self, messages, system=None, max_tokens=512,
+                    with_thinking=True, timeout=120):
+        """Open an Anthropic-format streaming request and capture SSE signals.
+
+        Standalone version uses curl -N --no-buffer only (no httpx branch).
+        Mirrors the modular ``APIClient.stream_call`` semantics: never
+        raises; all errors go into ``signals.transport_error``.
+        """
+        url = self.base_url
+        if url.endswith("/v1"):
+            url = url[:-3]
+        url += "/v1/messages"
+
+        body = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "stream": True,
+        }
+        if system:
+            body["system"] = system
+        if with_thinking:
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": max(1, max_tokens - 1),
+            }
+
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "accept": "text/event-stream",
+        }
+
+        signals = StreamSignals()
+        start = time.time()
+        try:
+            self._stream_via_curl(url, headers, body, timeout, signals)
+        except Exception as e:
+            if signals.transport_error is None:
+                signals.transport_error = str(e)
+        finally:
+            signals.total_duration_seconds = time.time() - start
+        return signals
+
+    def _stream_via_curl(self, url, headers, body, timeout, signals):
+        """Curl branch of stream_call. ``curl -N --no-buffer`` disables
+        curl's output buffering so SSE events are streamed as they arrive."""
+        cmd = [
+            "curl", "-sk", "-N", "--no-buffer", "-X", "POST", url,
+            "--max-time", str(timeout),
+            "--data-binary", "@-",
+        ]
+        for k, v in headers.items():
+            cmd.extend(["-H", f"{k}: {v}"])
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                proc.stdin.write(json.dumps(body).encode("utf-8"))
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+
+            def iter_stdout():
+                while True:
+                    chunk = proc.stdout.read(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+
+            _parse_sse_stream(iter_stdout(), signals)
+            proc.wait(timeout=timeout + 10)
+            if proc.returncode != 0 and signals.raw_event_count == 0:
+                err = proc.stderr.read().decode("utf-8", errors="replace")[:200]
+                signals.transport_error = f"curl failed: {err}"
+        except subprocess.TimeoutExpired:
+            if signals.transport_error is None:
+                signals.transport_error = "curl stream timeout"
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        except Exception as e:
+            if signals.transport_error is None:
+                signals.transport_error = str(e)
 
 
 # ============================================================

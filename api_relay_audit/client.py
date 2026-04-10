@@ -10,6 +10,8 @@ import time
 
 import httpx
 
+from api_relay_audit.stream_integrity import StreamSignals
+
 
 def _parse_curl_i_output(output: str) -> dict:
     """Parse ``curl -i`` (or ``curl -sk -i``) stdout into a response dict.
@@ -67,6 +69,117 @@ def _parse_curl_i_output(output: str) -> dict:
         "body": body_block,
         "error": None,
     }
+
+
+def _populate_stream_signals(event: dict, signals: StreamSignals) -> None:
+    """Dispatch a single parsed SSE event dict into a StreamSignals.
+
+    Mutates ``signals`` in place. Never raises — malformed fields
+    are silently ignored so a broken event anywhere in the stream
+    does not abort the rest of the parse.
+
+    This helper lives at module scope (rather than on ``APIClient``)
+    so it can be unit-tested without instantiating a client or
+    touching the network.
+    """
+    signals.raw_event_count += 1
+    event_type = event.get("type", "")
+    if isinstance(event_type, str) and event_type:
+        signals.event_types.append(event_type)
+
+    if event_type == "message_start":
+        signals.has_message_start = True
+        message = event.get("message", {})
+        if isinstance(message, dict):
+            model_name = message.get("model")
+            if isinstance(model_name, str):
+                signals.message_start_model = model_name
+            usage = message.get("usage", {})
+            if isinstance(usage, dict):
+                input_tokens = usage.get("input_tokens")
+                if isinstance(input_tokens, int):
+                    signals.input_tokens = input_tokens
+
+    elif event_type == "content_block_start":
+        signals.has_content_block_start = True
+        block = event.get("content_block", {})
+        if isinstance(block, dict):
+            block_type = block.get("type", "")
+            if isinstance(block_type, str) and block_type:
+                signals.content_block_types.append(block_type)
+            if block.get("type") == "thinking":
+                signals.thinking_start_seen = True
+
+    elif event_type == "content_block_delta":
+        signals.has_content_block_delta = True
+        delta = event.get("delta", {})
+        if isinstance(delta, dict):
+            delta_type = delta.get("type")
+            if isinstance(delta_type, str) and delta_type:
+                signals.delta_types.append(delta_type)
+
+            if delta_type == "text_delta":
+                signals.has_text_delta = True
+            elif delta_type == "thinking_delta":
+                signals.thinking_delta_seen = True
+            elif delta_type == "signature_delta":
+                signature = delta.get("signature")
+                if isinstance(signature, str) and not signature.strip():
+                    signals.empty_signature_delta_count += 1
+
+    elif event_type == "message_delta":
+        signals.has_message_delta = True
+        usage = event.get("usage", {})
+        if isinstance(usage, dict):
+            input_tokens = usage.get("input_tokens")
+            if isinstance(input_tokens, int):
+                signals.message_delta_input_tokens_samples.append(input_tokens)
+            output_tokens = usage.get("output_tokens")
+            if isinstance(output_tokens, int):
+                signals.output_tokens_samples.append(output_tokens)
+
+    elif event_type == "message_stop":
+        signals.has_message_stop = True
+
+
+def _parse_sse_stream(byte_iterator, signals: StreamSignals) -> None:
+    """Consume a byte iterator and populate ``signals`` with every
+    SSE event it contains.
+
+    Handles:
+
+    - Multi-byte chunks that split in the middle of a UTF-8 sequence
+      (uses ``errors="ignore"`` on decode so we don't wedge)
+    - Multiple events in a single chunk
+    - A single event split across multiple chunks (buffered until
+      a newline is seen)
+    - A terminal ``data: [DONE]`` sentinel
+    - Malformed JSON lines (skipped silently, do not abort the
+      rest of the stream)
+    - Empty lines / non-``data: `` lines (skipped)
+
+    Never raises. Mutates ``signals`` in place.
+    """
+    buffer = ""
+    for chunk in byte_iterator:
+        if isinstance(chunk, (bytes, bytearray)):
+            buffer += chunk.decode("utf-8", errors="ignore")
+        else:
+            buffer += chunk
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            line = line.strip()
+            if not line.startswith("data: "):
+                continue
+            data = line[6:]
+            if data == "[DONE]":
+                return
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                _populate_stream_signals(event, signals)
 
 
 class APIClient:
@@ -430,3 +543,154 @@ class APIClient:
             return _parse_curl_i_output(output)
         except Exception as e:
             return {"status": 0, "headers": {}, "body": "", "error": str(e)}
+
+    # -- Streaming (Step 10 stream integrity) --------------------------------
+
+    def stream_call(self, messages, system=None, max_tokens=512,
+                    with_thinking: bool = True, timeout: int = 120) -> StreamSignals:
+        """Open an Anthropic-format streaming request and capture SSE signals.
+
+        Unlike :meth:`call`, this method is **Anthropic-only**. The SSE event
+        schema differs from OpenAI's, and Step 10's whitelist is specifically
+        about Anthropic's event shape. If the target relay is a pure
+        OpenAI-compatible endpoint, the stream request returns a non-200
+        status (or an OpenAI-format stream that fails our whitelist), and
+        the caller should treat the result as *inconclusive*.
+
+        Never raises. All transport errors are written to
+        :attr:`StreamSignals.transport_error` so the caller can always
+        inspect the returned dataclass. A zero-event return with
+        ``transport_error is None`` is valid and means the relay opened the
+        stream cleanly but produced no data.
+
+        Args:
+            messages: List of user/assistant message dicts.
+            system: Optional system prompt string.
+            max_tokens: Maximum tokens to generate. Defaults to 512.
+            with_thinking: If True, include a ``thinking`` block in the
+                request body to exercise the thinking-block delta path.
+                Defaults to True because Step 10's whole point is to
+                watch for thinking signature anomalies.
+            timeout: Per-stream timeout in seconds. Defaults to 120.
+
+        Returns:
+            A fully populated :class:`StreamSignals` dataclass.
+        """
+        url = self.base_url
+        if url.endswith("/v1"):
+            url = url[:-3]
+        url += "/v1/messages"
+
+        body = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "stream": True,
+        }
+        if system:
+            body["system"] = system
+        if with_thinking:
+            # thinking.budget_tokens must be strictly less than max_tokens
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": max(1, max_tokens - 1),
+            }
+
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "accept": "text/event-stream",
+        }
+
+        signals = StreamSignals()
+        start = time.time()
+        try:
+            if self._use_curl:
+                self._stream_via_curl(url, headers, body, timeout, signals)
+            else:
+                self._stream_via_httpx(url, headers, body, timeout, signals)
+        except Exception as e:
+            if signals.transport_error is None:
+                signals.transport_error = str(e)
+        finally:
+            signals.total_duration_seconds = time.time() - start
+
+        return signals
+
+    def _stream_via_httpx(self, url: str, headers: dict, body: dict,
+                          timeout: int, signals: StreamSignals) -> None:
+        """httpx branch of :meth:`stream_call`. SSL errors trigger a
+        one-time fallback to the curl branch (mirroring :meth:`_post`)."""
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                with client.stream("POST", url, headers=headers, json=body) as response:
+                    if response.status_code != 200:
+                        # Read a tiny prefix of the error body for diagnostics,
+                        # truncated so an unredacted error page cannot bloat signals.
+                        try:
+                            err_body = response.read().decode("utf-8", errors="ignore")[:200]
+                        except Exception:
+                            err_body = ""
+                        signals.transport_error = (
+                            f"HTTP {response.status_code}"
+                            + (f": {err_body}" if err_body else "")
+                        )
+                        return
+                    _parse_sse_stream(response.iter_bytes(), signals)
+        except Exception as e:
+            if self._handle_ssl_error(e):
+                self._stream_via_curl(url, headers, body, timeout, signals)
+                return
+            raise
+
+    def _stream_via_curl(self, url: str, headers: dict, body: dict,
+                         timeout: int, signals: StreamSignals) -> None:
+        """Curl branch of :meth:`stream_call`. Uses ``curl -N --no-buffer``
+        to disable curl's own output buffering so SSE events are streamed
+        to stdout as they arrive. The request body is piped via stdin."""
+        cmd = [
+            "curl", "-sk", "-N", "--no-buffer", "-X", "POST", url,
+            "--max-time", str(timeout),
+            "--data-binary", "@-",
+        ]
+        for k, v in headers.items():
+            cmd.extend(["-H", f"{k}: {v}"])
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                proc.stdin.write(json.dumps(body).encode("utf-8"))
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                # Curl already died (e.g. SSL handshake failed); let the
+                # wait() + stderr read below report the real reason.
+                pass
+
+            def iter_stdout():
+                while True:
+                    chunk = proc.stdout.read(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+
+            _parse_sse_stream(iter_stdout(), signals)
+            proc.wait(timeout=timeout + 10)
+            if proc.returncode != 0 and signals.raw_event_count == 0:
+                err = proc.stderr.read().decode("utf-8", errors="replace")[:200]
+                signals.transport_error = f"curl failed: {err}"
+        except subprocess.TimeoutExpired:
+            if signals.transport_error is None:
+                signals.transport_error = "curl stream timeout"
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        except Exception as e:
+            if signals.transport_error is None:
+                signals.transport_error = str(e)
