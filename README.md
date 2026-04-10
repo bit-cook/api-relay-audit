@@ -2,9 +2,11 @@
 
 by [@li9292](https://x.com/li9292)
 
-Security audit tool for third-party AI API relay/proxy services. Detects hidden prompt injection, prompt leakage, instruction override, and context truncation.
+Security audit tool for third-party AI API relay/proxy services. Detects hidden prompt injection, prompt leakage, instruction override, context truncation, and tool-call package substitution (AC-1.a).
 
-## 7-Step Audit
+Threat model follows the AC-1 / AC-1.a / AC-1.b / AC-2 taxonomy from Liu et al., [*Your Agent Is Mine: Measuring Malicious Intermediary Attacks on the LLM Supply Chain*, arXiv:2604.08407](https://arxiv.org/abs/2604.08407).
+
+## 8-Step Audit
 
 | Step | Test | What it detects |
 |------|------|-----------------|
@@ -15,6 +17,7 @@ Security audit tool for third-party AI API relay/proxy services. Detects hidden 
 | 5 | Instruction Conflict | User system prompt being overridden (cat test + identity test) |
 | 6 | Jailbreak | Weak anti-extraction defenses (3 methods) |
 | 7 | Context Length | Truncation below advertised limit (canary markers + binary search) |
+| 8 | Tool-Call Substitution (AC-1.a) | Package-name rewriting on the return path (`requests` → `reqeusts` typosquat) |
 
 ---
 
@@ -97,15 +100,17 @@ All three options share the same CLI interface:
 | `--output` | No | Report output path (markdown) | stdout |
 | `--skip-infra` | No | Skip infrastructure recon | `False` |
 | `--skip-context` | No | Skip context length test | `False` |
+| `--skip-tool-substitution` | No | Skip AC-1.a tool-call substitution test | `False` |
+| `--warmup` | No | Send N benign requests before the audit (partial AC-1.b mitigation) | `0` |
 | `--timeout` | No | Request timeout (seconds) | `120` |
 
 ## Risk Levels
 
 | Level | Criteria | Recommendation |
 |-------|----------|----------------|
-| LOW | No injection + instructions work + full context | Safe to use |
-| MEDIUM | Minor injection (<100 tokens) or prompt extractable | OK for simple tasks |
-| HIGH | Injection >500 tokens or instructions overridden | Not recommended |
+| LOW | No injection + instructions work + full context + no tool-call substitution | Safe to use |
+| MEDIUM | Minor injection (<100 tokens) or prompt extractable, no substitution | OK for simple tasks |
+| HIGH | Injection >500 tokens AND instructions overridden, OR any tool-call substitution | Not recommended |
 
 ## Author
 

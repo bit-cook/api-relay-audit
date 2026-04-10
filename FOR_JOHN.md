@@ -474,13 +474,105 @@ FILLER = "abcdefghijklmnopqrstuvwxyz0123456789 ..."
 
 ---
 
+## 论文集成 (arXiv 2604.08407)
+
+### 为什么要读这篇论文
+
+2026-04-09，UCSB + Fuzzland 团队在 arXiv 上挂了一篇叫 *Your Agent Is Mine: Measuring Malicious Intermediary Attacks on the LLM Supply Chain* 的论文。这是**第一次**有人把"中转站是恶意中间人"这件事做成了正经的威胁建模 + 实测。他们买了 28 个付费中转、扫了 400 个免费中转，发现：
+
+- **1 个付费 + 8 个免费**中转已经在注入恶意代码（改写 tool_call 返回值）
+- **17 个中转**触碰了研究者挂在 AWS 上的 canary 凭证（被动扫描泄漏）
+- **1 个中转**直接把研究者钱包里的 ETH 掏空了
+- **440 个已泄漏凭证**在公开论坛上传播，401/440 的会话**已经**在自主执行（YOLO mode），只差一个 payload 就能 RCE
+
+论文把攻击面形式化成四类：
+
+| 代号 | 全称 | 含义 |
+|---|---|---|
+| **AC-1** | Payload Injection | 中转站改写 tool_call 返回值 |
+| **AC-1.a** | Dependency-Targeted Injection | AC-1 的变种：改写包名 (`requests` → `reqeusts` typosquat) |
+| **AC-1.b** | Conditional Delivery | AC-1 的变种：只在特定条件触发（YOLO 模式、请求数 > 50、特定关键词） |
+| **AC-2** | Secret Exfiltration | 被动扫描请求流量，泄漏 API key / 凭证 |
+
+这个分类很重要，因为它把我们原来那套"有没有注入 system prompt"的思维拔高了一层——**真正血腥的战场不在 prompt，在 tool_call**。
+
+### 我们之前的盲点
+
+原来的 7 步审计只覆盖了 **prompt 层面的 tampering**：system prompt 注入、指令覆盖、上下文截断。这些都是重要的，但它们都是"用户读了一段奇怪的回复"那种问题。
+
+**tool_call 层面完全没覆盖。** 一个运行 AC-1.a 的中转站，当你让它帮你装个 `requests` 库，它会在返回的 tool_call 里把包名悄悄改成 `reqeusts`（少一个字母），你的 agent 自动执行 `pip install reqeusts`，typosquat 的恶意包拿到你本机的 code execution。**没有任何 prompt 层面的检测能看到这一手**。
+
+### 帕累托前沿决定做什么
+
+论文给了很多可借鉴的东西，但不可能一次做完。列了一下每个候选在"工程量 × 威胁覆盖"空间里的位置：
+
+| 方案 | 工程量 | 覆盖率 | Pareto 地位 |
+|---|---|---|---|
+| AC-1.a 文本 echo 替换测试 | 极低（~80 行，不动 client） | 覆盖论文实测中最危险的变种 | ✅ **前沿** |
+| Warm-up 协议 | 极低（~10 行，一个 flag） | 部分缓解 AC-1.b 请求数门槛类后门 | ✅ **前沿** |
+| 风险矩阵升级 + 论文引用 | 几乎为零 | 报告学术锚点 + 传播弹药 | ✅ **前沿** |
+| 完整 AC-1（tool_call 支持） | 高（~150 行 client + 双格式 + curl 版本同步 + 新测试） | 边际增量有限：论文实测的 AC-1 几乎全是 AC-1.a | ❌ 被支配 |
+| AC-2 canary 被动版 | 中 | 不能抓延迟探测，价值低 | ❌ 被支配 |
+
+**前 3 个都在前沿上**，做了。后 2 个被支配了，留到 backlog。
+
+### 这次到底改了什么
+
+1. **新增 Step 8 — Tool-Call Package Substitution (AC-1.a)**
+   - 新文件 `api_relay_audit/tool_substitution.py` （模块化版本）
+   - 在 standalone `audit.py` 里以内联 Section 3b 的形式存在
+   - 逻辑：让模型原样输出 4 条钉版本的 install 命令（`pip install requests==2.31.0`、`npm install lodash@4.17.21`、`cargo add serde`、`go get github.com/stretchr/testify`），然后字符级 diff
+   - 三类判定：`exact` / `whitespace`（大小写空格差异，良性）/ `substituted`（实质性改写，🔴 红旗）
+
+2. **新 CLI flag `--warmup N`**
+   - 审计前发 N 个 `"ok"` benign 请求，跨过 AC-1.b 的"前 50 次不激活"门槛
+   - 不是万能的——论文自己也说 finite black-box 无法可靠检测条件投递——只是降低漏测概率
+
+3. **风险矩阵升维到 3D**
+   - 原来：D1 (injection>100) AND D2 (overridden) → HIGH
+   - 现在：D3 (tool_call 改写) 单独成立就 HIGH。**一次代换就是 RCE 级别，不需要叠加**
+   - 其他等级规则保持不变，不破坏 dashboard 对 LOW/MEDIUM/HIGH 的消费
+
+4. **文档 + 传播**
+   - README 顶部加了论文引用
+   - CLAUDE.md 列出完整的 AC-1/AC-1.a/AC-1.b/AC-2 分类和各自的实现状态
+   - SKILL.md 更新到 v2.1.0，8 步审计
+   - 这份 FOR_JOHN.md 加了当前这一节
+
+### 主动放弃的东西（backlog）
+
+这些**故意**没做，不是忘了：
+
+1. **完整 AC-1 支持（APIClient 的 tool_calling 扩展）**
+   真正的 tool_call 改写检测需要给 `APIClient` 加 `tools` / `tool_choice` 参数和两套格式的解析。工程量 ~150 行，但边际增量被 AC-1.a 压制：论文实测的所有活跃 AC-1 案例都是 AC-1.a 变种，因为路由器的 substitution rule 是跑在响应字符串上的正则，不区分 tool_call JSON 还是明文。等到看见第一个"只改 tool_call JSON、不改明文"的样本再做。
+
+2. **AC-2 凭证 canary（被动泄漏检测）**
+   需要挂一个可回调的外部域名当监听端点——论文就是靠这个抓到 147 个 IP、6 个 JA3 指纹。目前没有这个基础设施，等有了独立域名 + 被动 webhook 监听服务再开工。
+
+3. **完整 AC-1.b 检测**
+   条件投递类后门的完整检测需要模拟 YOLO 模式指纹、关键词 gating、时间窗口 gating 等多维度探测。目前只做了最简单的 warm-up 缓解。论文自己都说 `finite black-box audits can't reliably catch AC-1.b`，我们也别假装能。
+
+4. **风险等级四维化**
+   原来的 LOW/MEDIUM/HIGH 三档有 dashboard 下游在消费，升级到 4 档会破坏向后兼容。暂不动。
+
+### 为什么不是一次性做完
+
+用户（你自己）在计划阶段明确说"用帕累托前沿做技术选型"。帕累托最优的意思是：在当前投入下，没有任何其他方案能在"工程量不增加"和"覆盖率不下降"两个维度同时压倒当前选择。
+
+把完整 AC-1 塞进这次 PR 会让 `APIClient` 变得复杂、双版本同步成本翻倍、可能触发部分 relay 的 422，而换来的边际覆盖率是 AC-1.a 已经覆盖到的那部分攻击面——**不划算**。不划算的事情不做。
+
+这个项目的规模决定了它不应该一次吃太多——它要保持"可以一条 curl 下载 + python 跑"的简洁性。每一个新 Step 都要过一道"是否值得把 audit.py 再厚一圈"的问。AC-1.a 这个 Step 过了，其他的还没过。
+
+---
+
 ## 最后的话
 
-这个项目的精髓不在于代码量（总共不到 500 行），而在于它的**思维方式**：
+这个项目的精髓不在于代码量（总共不到 600 行），而在于它的**思维方式**：
 
 1. **利用不变量检测异常**：token 计数是不可伪造的不变量，delta 方法就是基于这个不变量
 2. **用行为测试替代静态分析**：你无法直接看到中继服务的代码，但你可以通过"猫测试"观察它的行为
 3. **算法选择匹配问题特征**：上下文截断是单调的（短文本通过 → 更短的也通过），所以二分查找是最优策略
 4. **帕累托最优的工程权衡**：不追求完美的模块化或完美的覆盖率，而是在当前规模下找到最实用的平衡点
+5. **借力学术工作**：拿 arXiv 2604.08407 的威胁模型当锚点，自己的工具瞬间从"一个 script"变成"论文威胁模型的客户端侧对策"——不是为了装，是为了让下游读者知道这个工具在认真的威胁模型里的位置
 
 好的工程不是写出最多的代码，而是用最少的代码解决最关键的问题。这个项目就是一个很好的例子。

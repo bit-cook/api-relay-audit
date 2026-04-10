@@ -1,13 +1,13 @@
 ---
 name: api-relay-audit
-description: Audit third-party AI API relay/proxy services for security risks. Detects hidden prompt injection, prompt leakage, instruction override, identity hijacking, jailbreak vulnerabilities, and context truncation. Use when: "test relay", "audit API", "audit relay", "detect injection", "relay security", "API relay audit", "is this relay safe", "does it inject prompts", "test proxy API", "check API key", "中转站安全", "测试中转站", "中转站审计".
-version: 2.0.0
+description: Audit third-party AI API relay/proxy services for security risks. Detects hidden prompt injection, prompt leakage, instruction override, identity hijacking, jailbreak vulnerabilities, context truncation, and tool-call package substitution (AC-1.a). Use when: "test relay", "audit API", "audit relay", "detect injection", "relay security", "API relay audit", "is this relay safe", "does it inject prompts", "test proxy API", "check API key", "中转站安全", "测试中转站", "中转站审计".
+version: 2.1.0
 metadata: {"openclaw":{"requires":{"anyBins":["curl","python3","python"],"env":[]},"emoji":"🛡️","homepage":"https://github.com/toby-bridges/api-relay-audit"}}
 ---
 
 # API Relay Security Audit (API 中转站安全审计)
 
-A self-contained 7-step security audit for third-party AI API relay/proxy services (中转站). One script, zero config, full report.
+A self-contained 8-step security audit for third-party AI API relay/proxy services (中转站). One script, zero config, full report. Threat taxonomy follows Liu et al., *Your Agent Is Mine*, arXiv:2604.08407.
 
 ## Quick Start (快速开始)
 
@@ -23,7 +23,7 @@ The script has zero dependencies beyond Python 3 + `curl`. All HTTP calls go thr
 
 ## What This Skill Does (功能概述)
 
-Runs a 7-step automated audit against any OpenAI-compatible or Anthropic-compatible API relay:
+Runs an 8-step automated audit against any OpenAI-compatible or Anthropic-compatible API relay:
 
 | Step | Test | What It Detects |
 |------|------|-----------------|
@@ -34,6 +34,7 @@ Runs a 7-step automated audit against any OpenAI-compatible or Anthropic-compati
 | 5 | Instruction conflict (指令冲突测试) | Cat test + identity override -- does the user retain control? |
 | 6 | Jailbreak tests (越狱测试) | 3 jailbreak methods to test anti-extraction defenses |
 | 7 | Context length (上下文长度测试) | Canary markers at intervals, coarse scan then binary search for truncation boundary |
+| 8 | Tool-call substitution (工具调用改写, AC-1.a) | Pinned `pip install` / `npm install` / `cargo add` / `go get` probes; character-level diff against expected to detect package-name rewriting on the return path (`requests` -> `reqeusts` typosquat) |
 
 Output: a structured Markdown report with risk ratings per section and an overall verdict.
 
@@ -64,6 +65,8 @@ Ask the user for:
 Optional flags to ask about:
 - `--skip-infra` -- skip DNS/WHOIS/SSL checks (saves time if user only wants injection tests)
 - `--skip-context` -- skip context length test (saves 5-10 minutes)
+- `--skip-tool-substitution` -- skip AC-1.a package substitution probes (only use if the relay blocks plain text echo)
+- `--warmup N` -- send N benign requests before the audit to mitigate AC-1.b request-count-gated backdoors. Recommended `N=5-20` when auditing a suspicious free relay.
 
 ### Step 2: Download the Standalone Script (下载脚本)
 
@@ -109,7 +112,8 @@ Read the generated `audit-report.md`. The report contains structured sections fo
 2. **Prompt extraction results** -- how many of 6 methods succeeded
 3. **Instruction conflict results** -- cat test and identity test verdicts
 4. **Context length** -- actual vs advertised
-5. **Infrastructure red flags** -- domain age, SSL issues, proxy layers
+5. **Tool-call substitution (AC-1.a)** -- any 🔴 SUBSTITUTED verdict is a code-execution-level finding and instantly escalates to HIGH
+6. **Infrastructure red flags** -- domain age, SSL issues, proxy layers
 
 ### Step 5: Present Findings to User (呈现结果)
 
@@ -124,6 +128,7 @@ Summarize in this format:
 - Prompt Extraction: [N]/6 methods succeeded
 - User Control: [cat test pass/fail], [identity test pass/fail]
 - Context Length: [actual] ([full/truncated])
+- Tool-Call Substitution (AC-1.a): [clean / N probes rewritten]
 - Infrastructure: [key findings]
 
 **Recommendation:** [use freely / use with caution / do not use]
@@ -137,9 +142,11 @@ Include specific red flags and extracted prompt content (if any) below the summa
 
 | Level | Criteria | Recommendation |
 |-------|----------|----------------|
-| GREEN (低风险) | No injection + instructions work + full context | Safe for general use (可放心使用) |
-| YELLOW (中风险) | Minor injection (<100 tokens) OR prompt extractable | OK for simple tasks, caution for complex workflows (简单任务可用，复杂工作流需谨慎) |
-| RED (高风险) | Injection >500 tokens OR user instructions overridden | Do not use (不建议使用) |
+| GREEN (低风险) | No injection + instructions work + full context + no tool-call substitution | Safe for general use (可放心使用) |
+| YELLOW (中风险) | Minor injection (<100 tokens) OR prompt extractable, no substitution | OK for simple tasks, caution for complex workflows (简单任务可用，复杂工作流需谨慎) |
+| RED (高风险) | Injection >100 tokens AND instructions overridden, OR **any** tool-call substitution (AC-1.a) | Do not use (不建议使用) |
+
+**Note on AC-1.a**: A single substituted probe (e.g. `pip install requests` -> `pip install reqeusts`) is sufficient to escalate to RED. The attacker needs exactly one successful package-install rewrite to get persistent code execution on the agent host. This finding is non-negotiable.
 
 ### Token Injection Thresholds (Token 注入阈值)
 
@@ -229,6 +236,8 @@ python audit.py [OPTIONS]
 | `--model` | No | `claude-opus-4-6` | Model to test against (测试模型) |
 | `--skip-infra` | No | false | Skip DNS/WHOIS/SSL/HTTP header checks (跳过基础设施检查) |
 | `--skip-context` | No | false | Skip context length test, saves 5-10 min (跳过上下文测试) |
+| `--skip-tool-substitution` | No | false | Skip AC-1.a tool-call substitution test (跳过工具调用改写检测) |
+| `--warmup` | No | 0 | Send N benign requests before the audit to mitigate AC-1.b request-count gates (审计前预热次数) |
 | `--timeout` | No | 120 | Request timeout in seconds (请求超时秒数) |
 | `--output` | No | stdout | Path for the Markdown report (报告输出路径) |
 
