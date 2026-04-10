@@ -182,3 +182,197 @@ class StreamSignals:
     transport_error: Optional[str] = None
     total_duration_seconds: Optional[float] = None
     raw_event_count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Verdict analysis (Sub-PR 2)
+# ---------------------------------------------------------------------------
+
+# Cap for how many unknown event types we report in findings output.
+# hvoy.ai's claude_detector.py uses -6 as a numeric penalty cap on the
+# SSE shape score; we don't use numeric scoring but we cap the list
+# length at 6 to keep report output bounded even on pathological relays.
+MAX_UNKNOWN_EVENTS_REPORTED = 6
+
+
+def _check_usage_monotonic(signals: "StreamSignals") -> bool:
+    """``output_tokens_samples`` must be monotonically non-decreasing.
+
+    An empty list is vacuously monotonic; a single-element list is too.
+    """
+    samples = signals.output_tokens_samples
+    if len(samples) <= 1:
+        return True
+    for i in range(1, len(samples)):
+        if samples[i] < samples[i - 1]:
+            return False
+    return True
+
+
+def _check_usage_consistent(signals: "StreamSignals") -> bool:
+    """``message_delta`` ``input_tokens`` samples must agree with the
+    ``input_tokens`` reported by the initial ``message_start``.
+
+    A relay that rewrites usage (to hide a model downgrade or
+    under-bill the caller) often fails this invariant. Returns True
+    if consistent (or if there's nothing to compare)."""
+    if signals.input_tokens is None:
+        return True
+    if not signals.message_delta_input_tokens_samples:
+        return True
+    return all(
+        sample == signals.input_tokens
+        for sample in signals.message_delta_input_tokens_samples
+    )
+
+
+def _check_stream_model(signals: "StreamSignals") -> bool:
+    """``message_start.message.model`` should contain ``"claude"`` for
+    an Anthropic-format streaming response.
+
+    Returns True if the model name looks Claude-like, or if the field
+    was never populated (the "no events received" branch handles that
+    case separately as inconclusive)."""
+    if not signals.message_start_model:
+        return True
+    return "claude" in signals.message_start_model.lower()
+
+
+def analyze_stream(signals: "StreamSignals") -> dict:
+    """Analyze a populated :class:`StreamSignals` for integrity anomalies.
+
+    Returns a dict with these keys:
+
+    - ``verdict``: ``"clean"`` / ``"anomaly"`` / ``"inconclusive"``
+    - ``event_shape``: ``"pass"`` / ``"partial"`` / ``"weak"``
+    - ``unknown_events``: list of unknown event types (capped at
+      :data:`MAX_UNKNOWN_EVENTS_REPORTED`)
+    - ``usage_monotonic``: bool
+    - ``usage_consistent``: bool
+    - ``signature_valid``: bool
+    - ``stream_model_name``: ``message_start.message.model`` or ``None``
+    - ``stream_model_is_claude``: bool
+    - ``findings``: list of human-readable reasons (empty on clean)
+
+    Verdict priority (first match wins):
+
+    1. **inconclusive** — ``transport_error`` is non-None, OR
+       ``raw_event_count == 0``, OR only ``ping`` events were seen
+       (a stream that opens but never sends ``message_start`` is
+       either broken or non-Anthropic; we have no basis to judge).
+    2. **anomaly** — at least one of: unknown event types present,
+       usage non-monotonic, usage inconsistent, empty
+       ``signature_delta`` count > 0, stream model name non-Claude.
+    3. **clean** — none of the above triggered.
+
+    The function is pure and deterministic: identical input always
+    produces identical output. No I/O.
+    """
+    # Priority 1: inconclusive via transport error
+    if signals.transport_error:
+        return {
+            "verdict": "inconclusive",
+            "event_shape": "weak",
+            "unknown_events": [],
+            "usage_monotonic": True,
+            "usage_consistent": True,
+            "signature_valid": True,
+            "stream_model_name": signals.message_start_model,
+            "stream_model_is_claude": True,
+            "findings": [f"Stream transport error: {signals.transport_error}"],
+        }
+
+    # Priority 1b: inconclusive via no substantive events
+    non_ping_events = [e for e in signals.event_types if e != "ping"]
+    if signals.raw_event_count == 0 or not non_ping_events:
+        return {
+            "verdict": "inconclusive",
+            "event_shape": "weak",
+            "unknown_events": [],
+            "usage_monotonic": True,
+            "usage_consistent": True,
+            "signature_valid": True,
+            "stream_model_name": signals.message_start_model,
+            "stream_model_is_claude": True,
+            "findings": [
+                "Stream opened but produced no non-ping events — the "
+                "relay is either broken or does not speak Anthropic SSE"
+            ],
+        }
+
+    # Gather all anomaly signals (no early return — callers benefit
+    # from knowing every reason for the verdict).
+    unknown_events = sorted({
+        e for e in signals.event_types if e not in KNOWN_SSE_EVENT_TYPES
+    })
+    unknown_events_capped = unknown_events[:MAX_UNKNOWN_EVENTS_REPORTED]
+
+    usage_monotonic = _check_usage_monotonic(signals)
+    usage_consistent = _check_usage_consistent(signals)
+    signature_valid = signals.empty_signature_delta_count == 0
+    stream_model_is_claude = _check_stream_model(signals)
+
+    findings = []
+    if unknown_events:
+        suffix = " (+more, capped)" if len(unknown_events) > MAX_UNKNOWN_EVENTS_REPORTED else ""
+        findings.append(
+            f"Stream contained {len(unknown_events)} unknown SSE event "
+            f"type(s): {', '.join(unknown_events_capped)}{suffix}"
+        )
+    if not usage_monotonic:
+        findings.append(
+            "output_tokens samples across message_delta events went "
+            "backwards at least once — a relay is rewriting usage fields"
+        )
+    if not usage_consistent:
+        findings.append(
+            f"input_tokens at message_start ({signals.input_tokens}) "
+            f"disagrees with message_delta samples "
+            f"({signals.message_delta_input_tokens_samples}) — usage rewrite"
+        )
+    if not signature_valid:
+        findings.append(
+            f"{signals.empty_signature_delta_count} signature_delta event(s) "
+            "had empty signatures — thinking block downgrade or rewriter"
+        )
+    if not stream_model_is_claude:
+        findings.append(
+            f"Stream's message_start.message.model = "
+            f"{signals.message_start_model!r} does not contain 'claude' — "
+            "relay may be routing to a substitute model"
+        )
+
+    anomaly = bool(
+        unknown_events
+        or not usage_monotonic
+        or not usage_consistent
+        or not signature_valid
+        or not stream_model_is_claude
+    )
+
+    # Event-shape classification (human-readable summary for reporting).
+    shape_flags_seen = sum([
+        signals.has_message_start,
+        signals.has_content_block_start,
+        signals.has_content_block_delta,
+        signals.has_message_delta,
+        signals.has_message_stop,
+    ])
+    if shape_flags_seen >= 4 and signals.has_text_delta and not unknown_events:
+        event_shape = "pass"
+    elif shape_flags_seen >= 2:
+        event_shape = "partial"
+    else:
+        event_shape = "weak"
+
+    return {
+        "verdict": "anomaly" if anomaly else "clean",
+        "event_shape": event_shape,
+        "unknown_events": unknown_events_capped,
+        "usage_monotonic": usage_monotonic,
+        "usage_consistent": usage_consistent,
+        "signature_valid": signature_valid,
+        "stream_model_name": signals.message_start_model,
+        "stream_model_is_claude": stream_model_is_claude,
+        "findings": findings,
+    }
