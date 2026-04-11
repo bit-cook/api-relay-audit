@@ -129,6 +129,82 @@ class TestCallAnthropic:
         assert result["text"] == ""
         assert result["input_tokens"] == 0
 
+    @patch("api_relay_audit.client.httpx.post")
+    def test_thinking_block_before_text(self, mock_post, client):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "content": [
+                {"type": "thinking", "thinking": "let me think..."},
+                {"type": "text", "text": "final answer"},
+            ],
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        }
+        mock_post.return_value = resp
+
+        result = client._call_anthropic([{"role": "user", "content": "x"}])
+        assert result["text"] == "final answer"
+        assert result["input_tokens"] == 12
+
+    @patch("api_relay_audit.client.httpx.post")
+    def test_tool_use_block_before_text(self, mock_post, client):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "content": [
+                {"type": "tool_use", "id": "t1", "name": "calc", "input": {}},
+                {"type": "text", "text": "done"},
+            ],
+            "usage": {},
+        }
+        mock_post.return_value = resp
+
+        result = client._call_anthropic([{"role": "user", "content": "x"}])
+        assert result["text"] == "done"
+
+    @patch("api_relay_audit.client.httpx.post")
+    def test_multiple_text_blocks_concatenated(self, mock_post, client):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "content": [
+                {"type": "text", "text": "part one "},
+                {"type": "text", "text": "part two"},
+            ],
+            "usage": {},
+        }
+        mock_post.return_value = resp
+
+        result = client._call_anthropic([{"role": "user", "content": "x"}])
+        assert result["text"] == "part one part two"
+
+    @patch("api_relay_audit.client.httpx.post")
+    def test_content_missing_returns_empty(self, mock_post, client):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"usage": {}}
+        mock_post.return_value = resp
+
+        result = client._call_anthropic([{"role": "user", "content": "x"}])
+        assert result["text"] == ""
+
+    @patch("api_relay_audit.client.httpx.post")
+    def test_content_not_a_list_returns_empty(self, mock_post, client):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"content": "not a list", "usage": {}}
+        mock_post.return_value = resp
+
+        result = client._call_anthropic([{"role": "user", "content": "x"}])
+        assert result["text"] == ""
+
+    @patch("api_relay_audit.client.httpx.post")
+    def test_only_thinking_block_returns_empty(self, mock_post, client):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "content": [{"type": "thinking", "thinking": "reasoning only"}],
+            "usage": {},
+        }
+        mock_post.return_value = resp
+
+        result = client._call_anthropic([{"role": "user", "content": "x"}])
+        assert result["text"] == ""
+
 
 # ---------------------------------------------------------------------------
 # _call_openai
@@ -266,6 +342,26 @@ class TestAutoDetection:
         assert result["text"] == "detected"
         assert client.detected_format == "anthropic"
         assert "time" in result
+
+    @patch("api_relay_audit.client.httpx.post")
+    def test_anthropic_detected_with_leading_thinking_block(self, mock_post, client):
+        """A multi-block response whose first entry is a thinking block must
+        not cause auto-detection to fall through to OpenAI. Regression for
+        the ``content[0].text`` flattening bug."""
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "content": [
+                {"type": "thinking", "thinking": "step 1..."},
+                {"type": "text", "text": "the real answer"},
+            ],
+            "usage": {"input_tokens": 42, "output_tokens": 7},
+        }
+        mock_post.return_value = resp
+
+        result = client.call([{"role": "user", "content": "hi"}])
+        assert result["text"] == "the real answer"
+        assert client.detected_format == "anthropic"
+        assert mock_post.call_count == 1
 
     @patch("api_relay_audit.client.httpx.post")
     def test_openai_fallback_when_anthropic_empty(self, mock_post, client):

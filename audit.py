@@ -410,6 +410,31 @@ def analyze_stream(signals):
     }
 
 
+def _extract_anthropic_text(content) -> str:
+    """Concatenate text from every text block in an Anthropic ``content`` array.
+
+    Anthropic responses may lead with a ``thinking`` or ``tool_use`` block
+    when extended thinking or tool use is enabled. The old ``content[0].text``
+    shortcut returned ``""`` in those cases, which then cascaded into auto-
+    detection flipping to the OpenAI probe and every downstream text-based
+    step (token injection, identity, jailbreak, prompt extraction, tool
+    substitution) seeing an empty response and silently reporting clean.
+    """
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype is not None and btype != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts)
+
+
 class APIClient:
     """Unified API client that auto-detects Anthropic vs OpenAI format.
 
@@ -493,7 +518,7 @@ class APIClient:
         data = self._post(url, headers, body)
         if "_http_error" in data:
             return {"error": data["_http_error"]}
-        text = data.get("content", [{}])[0].get("text", "")
+        text = _extract_anthropic_text(data.get("content"))
         usage = data.get("usage", {})
         return {
             "text": text,
