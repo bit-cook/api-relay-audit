@@ -308,6 +308,148 @@ class TestParseSseStream:
         assert signals.raw_event_count == 3
         assert signals.event_types == ["ping", "message_start", "message_stop"]
 
+    # ----- v1.7.1 Codex fixes (Round 5 LOW finding) -----
+
+    def test_parse_sse_stream_flushes_final_line_without_trailing_newline(self):
+        """v1.7.1 fix: streams that end without a trailing newline
+        (broken or truncated relay) must still have their final line
+        parsed. Previously the last line stayed in the buffer forever."""
+        signals = StreamSignals()
+        chunks = [
+            b'data: {"type":"message_start","message":{"model":"claude"}}\n\n',
+            b'data: {"type":"message_stop"}',  # NO trailing newline
+        ]
+        _parse_sse_stream(iter(chunks), signals)
+        assert signals.has_message_start is True
+        assert signals.has_message_stop is True, (
+            "Final line without trailing newline was dropped — v1.7.1 regression"
+        )
+        assert signals.raw_event_count == 2
+
+    def test_parse_sse_stream_flushed_line_can_be_done_sentinel(self):
+        """v1.7.1 fix: [DONE] as the flushed final line must NOT be
+        parsed as an event (it's a sentinel, not a JSON payload)."""
+        signals = StreamSignals()
+        chunks = [
+            b'data: {"type":"message_start","message":{"model":"claude"}}\n\n',
+            b"data: [DONE]",  # final line, no trailing newline
+        ]
+        _parse_sse_stream(iter(chunks), signals)
+        assert signals.has_message_start is True
+        # [DONE] must not have been counted as an event
+        assert signals.raw_event_count == 1
+
+    def test_parse_sse_stream_buffer_cap_sets_transport_error(self):
+        """v1.7.1 fix: an adversarial chunk > MAX_STREAM_BUFFER_BYTES
+        with no newline must trigger a transport error and bail,
+        preventing unbounded memory growth."""
+        from api_relay_audit.client import MAX_STREAM_BUFFER_BYTES
+        signals = StreamSignals()
+        # Single chunk larger than the cap, no newline → no drain
+        huge_chunk = b"A" * (MAX_STREAM_BUFFER_BYTES + 1024)
+        _parse_sse_stream(iter([huge_chunk]), signals)
+        assert signals.transport_error is not None
+        assert "buffer exceeded" in signals.transport_error.lower()
+        # No events should have been parsed from the garbage
+        assert signals.raw_event_count == 0
+
+    def test_parse_sse_stream_normal_sized_content_not_capped(self):
+        """v1.7.1 regression guard: a 100 KB thinking block (well below
+        the 1 MB cap) must parse normally."""
+        signals = StreamSignals()
+        large_text = "x" * 100_000  # 100 KB
+        event = {
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": large_text},
+        }
+        chunk = b"data: " + json.dumps(event).encode("utf-8") + b"\n\n"
+        _parse_sse_stream(iter([chunk]), signals)
+        assert signals.transport_error is None
+        assert signals.has_content_block_delta is True
+        assert signals.has_text_delta is True
+
+
+class TestCurlNonzeroExitHandling:
+    """v1.7.1 Codex fix for Round 5 MEDIUM finding: any non-zero curl
+    exit must set transport_error, even if partial events were parsed
+    before the stream failed. The previous code guarded this with
+    ``and signals.raw_event_count == 0`` which silently swallowed
+    mid-stream failures and judged truncated streams as clean."""
+
+    def test_curl_nonzero_exit_after_partial_events_sets_transport_error(self):
+        """Mid-stream curl failure: some events parsed, then non-zero
+        exit. transport_error must be set so analyze_stream returns
+        inconclusive instead of the clean/anomaly verdict on partial data."""
+        from io import BytesIO
+
+        partial_sse = (
+            b'data: {"type":"message_start","message":{"model":"claude-opus-4-6"}}\n\n'
+            b'data: {"type":"content_block_start","content_block":{"type":"text"}}\n\n'
+        )
+
+        def mock_popen_factory(*args, **kwargs):
+            proc = MagicMock()
+            proc.stdin = MagicMock()
+            proc.stdout = BytesIO(partial_sse)
+            proc.stderr = BytesIO(
+                b"curl: (18) transfer closed with outstanding read data remaining"
+            )
+            proc.wait = MagicMock(return_value=None)
+            proc.returncode = 1  # non-zero = curl failed
+            return proc
+
+        with patch("api_relay_audit.client.subprocess.Popen",
+                   side_effect=mock_popen_factory):
+            client = APIClient(
+                "https://relay.example.com", "sk-test", "claude-opus-4-6",
+                verbose=False,
+            )
+            client._use_curl = True  # force curl path
+            signals = client.stream_call(
+                [{"role": "user", "content": "hi"}],
+            )
+
+        # Partial events WERE parsed from the partial stream
+        assert signals.has_message_start is True
+        assert signals.has_content_block_start is True
+        # BUT transport_error MUST be set because curl exited non-zero
+        assert signals.transport_error is not None, (
+            "v1.7.1 Codex fix regression: mid-stream curl failure was "
+            "silently swallowed"
+        )
+        assert "curl failed" in signals.transport_error
+
+    def test_curl_zero_exit_clean_stream_no_transport_error(self):
+        """Regression guard: a clean curl exit (returncode 0) must NOT
+        set transport_error, even for streams without any events."""
+        from io import BytesIO
+
+        def mock_popen_factory(*args, **kwargs):
+            proc = MagicMock()
+            proc.stdin = MagicMock()
+            proc.stdout = BytesIO(
+                b'data: {"type":"message_start","message":{"model":"claude"}}\n\n'
+                b"data: [DONE]\n\n"
+            )
+            proc.stderr = BytesIO(b"")
+            proc.wait = MagicMock(return_value=None)
+            proc.returncode = 0  # success
+            return proc
+
+        with patch("api_relay_audit.client.subprocess.Popen",
+                   side_effect=mock_popen_factory):
+            client = APIClient(
+                "https://relay.example.com", "sk-test", "claude-opus-4-6",
+                verbose=False,
+            )
+            client._use_curl = True
+            signals = client.stream_call(
+                [{"role": "user", "content": "hi"}],
+            )
+
+        assert signals.transport_error is None
+        assert signals.has_message_start is True
+
 
 # ---------------------------------------------------------------------------
 # APIClient.stream_call (integration tests with mocked httpx)

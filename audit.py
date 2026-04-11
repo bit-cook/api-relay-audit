@@ -206,11 +206,37 @@ def _populate_stream_signals(event, signals):
         signals.has_message_stop = True
 
 
+# v1.7.1 safety cap on SSE parser buffer (see api_relay_audit/client.py)
+MAX_STREAM_BUFFER_BYTES = 1024 * 1024
+
+
+def _process_sse_line(line, signals):
+    """Parse a single SSE line and update signals.
+
+    Returns True if the [DONE] sentinel was seen; caller should stop.
+    """
+    line = line.strip()
+    if not line.startswith("data: "):
+        return False
+    data = line[6:]
+    if data == "[DONE]":
+        return True
+    try:
+        event = json.loads(data)
+    except json.JSONDecodeError:
+        return False
+    if isinstance(event, dict):
+        _populate_stream_signals(event, signals)
+    return False
+
+
 def _parse_sse_stream(byte_iterator, signals):
     """Consume a byte iterator and populate signals with every SSE event.
 
     Handles partial chunks, multi-event chunks, [DONE] termination,
-    and malformed JSON lines. Never raises.
+    malformed JSON, streams without a trailing newline, and caps the
+    buffer at MAX_STREAM_BUFFER_BYTES to prevent unbounded growth on
+    adversarial streams (v1.7.1 Codex fix). Never raises.
     """
     buffer = ""
     for chunk in byte_iterator:
@@ -218,20 +244,22 @@ def _parse_sse_stream(byte_iterator, signals):
             buffer += chunk.decode("utf-8", errors="ignore")
         else:
             buffer += chunk
+
+        if len(buffer) > MAX_STREAM_BUFFER_BYTES:
+            signals.transport_error = (
+                f"SSE stream buffer exceeded {MAX_STREAM_BUFFER_BYTES} bytes "
+                "(unterminated line — possible malformed or malicious stream)"
+            )
+            return
+
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
-            line = line.strip()
-            if not line.startswith("data: "):
-                continue
-            data = line[6:]
-            if data == "[DONE]":
+            if _process_sse_line(line, signals):
                 return
-            try:
-                event = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                _populate_stream_signals(event, signals)
+
+    # Flush residual final line if no trailing newline
+    if buffer:
+        _process_sse_line(buffer, signals)
 
 
 # -- Stream verdict analysis (Sub-PR 2, v1.7) -------------------------------
@@ -699,7 +727,11 @@ class APIClient:
 
             _parse_sse_stream(iter_stdout(), signals)
             proc.wait(timeout=timeout + 10)
-            if proc.returncode != 0 and signals.raw_event_count == 0:
+            if proc.returncode != 0:
+                # v1.7.1 Codex fix: any non-zero curl exit sets
+                # transport_error (was previously guarded by
+                # `and raw_event_count == 0`, which silently swallowed
+                # mid-stream failures on truncated streams).
                 err = proc.stderr.read().decode("utf-8", errors="replace")[:200]
                 signals.transport_error = f"curl failed: {err}"
         except subprocess.TimeoutExpired:
