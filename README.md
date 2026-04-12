@@ -43,8 +43,8 @@ python audit.py --key <你的KEY> --url <中转站地址> --profile web3 --outpu
 
 这是一个**质量管线异常严格**的 CLI 工具:
 
-- **319 个 pytest 单元测试**(从 v2.1 的 114 增长到 v2.3 的 319,+205 个)
-- **6 轮独立 Codex 代码审查** 在 v2.2 → v2.3 开发期间发现并修复 **10 个真实 bug**(全部是 false-negative 级别的安全工具失效,如果 ship 进生产会造成对真实恶意中转站误判为 clean)
+- **426 个 pytest 单元测试**(从 v2.1 的 114 增长到 v2.3 的 319,v1.7.5 review 轮再增 +107 个)
+- **6 轮独立 Codex 代码审查 + 1 轮独立 peer review** 在 v2.2 → v2.3 → v1.7.5 开发期间发现并修复 **17 个真实 bug**(全部是 false-negative 级别的安全工具失效,如果 ship 进生产会造成对真实恶意中转站误判为 clean)
 - **零回归**:每次修复都带 regression test,bug 类别不会复发
 - **双分发字节级一致性**:`test_risk_matrix_character_identical` 测试强制 modular 和 standalone 两个版本的风险矩阵代码块完全相同
 - **每一个借鉴的概念都有 docstring 归属**(LiteLLM Apache-2.0 secret regexes / hvoy.ai clean-room 重实现 / SlowMist 签名隔离灵感)
@@ -142,7 +142,7 @@ maps onto the attacker's credential-collection surface. **Do not use.**
 ```bash
 git clone https://github.com/toby-bridges/api-relay-audit.git
 cd api-relay-audit && pip install httpx pytest
-python -m pytest tests/ -v           # 跑全套 319 个测试
+python -m pytest tests/ -v           # 跑全套 426 个测试
 python scripts/audit.py --key <KEY> --url <URL> --output report.md
 ```
 
@@ -223,9 +223,9 @@ Output: a structured Markdown report with a risk summary (LOW / MEDIUM / HIGH) a
 
 This project uses an unusually rigorous quality pipeline for a CLI tool:
 
-- **319 pytest unit tests** across 11 test files (from 114 baseline in v2.1, +205 in v2.3)
-- **6 independent Codex review rounds** during v2.2 → v2.3 development
-- **10 real bugs caught and fixed** by those reviews before ship — every one was a false-negative-class failure that would have misjudged a truly malicious relay as "clean"
+- **426 pytest unit tests** across 13 test files (from 114 baseline in v2.1, +205 in v2.3, +107 in v1.7.5 review round)
+- **6 independent Codex review rounds + 1 independent peer review round** during v2.2 → v2.3 → v1.7.5 development
+- **17 real bugs caught and fixed** by those reviews before ship — every one was a false-negative-class failure that would have misjudged a truly malicious relay as "clean"
 - **Byte-level dual-distribution parity** enforced by `test_risk_matrix_character_identical` — the modular and standalone versions cannot drift
 - **Every ported concept has docstring attribution** (LiteLLM Apache-2.0 secret regexes, hvoy.ai clean-room reimplementation for SSE integrity, SlowMist inspiration for Web3 probes)
 - **Zero regressions**: every fix in every Codex round is accompanied by a regression test so the bug class cannot return
@@ -375,7 +375,7 @@ This design preserves the dual-distribution invariant, the single test suite, th
 1. **Detection based on invariants, not signatures.** Token counts are non-forgeable integers (Step 3). Canary markers are deterministic substrings (Step 7). SSE event types are a closed schema (Step 10). The tool doesn't look for known-bad patterns — it verifies that known-good invariants hold.
 2. **Tri-state verdicts, not booleans.** Every step returns clean, anomaly, or **inconclusive**. A relay that blocks a probe is not clean — it's suspicious. Silent swallowing becomes a detectable signal.
 3. **Clean-room reimplementation for ported concepts.** Step 9 regexes are adapted from LiteLLM's Apache-2.0 `_logging.py`. Step 10 SSE schema comes from hvoy.ai's `claude_detector.py` (no LICENSE — concepts and schema field names are not copyrightable). Step 11 probes follow SlowMist's signature isolation principle. Every port has attribution in the module docstring.
-4. **Codex review loop for non-trivial PRs.** Independent Codex reviews caught 10 real bugs across this feature set — every one would have shipped as a false-negative or parity violation otherwise. The review round is a 2-5 minute cost that prevents much larger downstream costs.
+4. **Review loop for non-trivial PRs.** Independent Codex reviews + peer review caught 17 real bugs across this feature set — every one would have shipped as a false-negative or parity violation otherwise. The review round is a 2-5 minute cost that prevents much larger downstream costs.
 5. **Pareto-optimal scope.** Every step has to earn its place: does it cover a dimension nothing else catches, does the detection stay valid across relay variants, can it be implemented without breaking zero-dep? Steps that fail any of these get deferred (see [`ROADMAP.md`](./ROADMAP.md) "Explicitly NOT doing").
 
 For a deep-dive engineering narrative (in Chinese), see [`FOR_JOHN.md`](./FOR_JOHN.md).
@@ -390,7 +390,7 @@ For a deep-dive engineering narrative (in Chinese), see [`FOR_JOHN.md`](./FOR_JO
 ```bash
 git clone https://github.com/toby-bridges/api-relay-audit.git
 cd api-relay-audit && pip install httpx pytest
-python -m pytest tests/ -v           # run the full 319-test suite
+python -m pytest tests/ -v           # run the full 426-test suite
 python scripts/audit.py --key <YOUR_KEY> --url <BASE_URL> --output report.md
 ```
 
@@ -415,7 +415,7 @@ scripts/
   audit.py                           #   11-step orchestrator (entry point)
   context-test.py                    #   Standalone context length probe
   extract-data.py                    #   Report → JSON extractor for dashboard
-tests/                               # 319 pytest tests across 11 files
+tests/                               # 426 pytest tests across 13 files
   test_dual_distribution_parity.py   #   byte-level parity guard
   test_client_stream.py              #   streaming SSE parser unit tests
   test_stream_integrity.py           #   Step 10 verdict analysis tests
