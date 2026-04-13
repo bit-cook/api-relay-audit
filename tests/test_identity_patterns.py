@@ -370,3 +370,45 @@ class TestFindNonClaudeIdentities:
         """The word 'gravity' must not trigger 'antigravity'."""
         text = "Gravity is a fundamental force of nature."
         assert find_non_claude_identities(text) == []
+
+
+# ---------------------------------------------------------------------------
+# v1.7.6: Warp / Windsurf reverse-proxy dev-tool channels (cctest.ai FAQ)
+#
+# Unlike sub2api's Antigravity injection, these platforms do NOT inject
+# a literal identity phrase. The brand label only occasionally bleeds
+# through. Classified as strict-tier because both are common English
+# words that must not false-match in ordinary prose.
+# ---------------------------------------------------------------------------
+
+class TestWarpWindsurfChannels:
+    def test_warp_windsurf_keywords_present(self):
+        for kw in ("warp", "windsurf"):
+            assert kw in NON_CLAUDE_IDENTITY_KEYWORDS
+
+    def test_warp_with_identity_anchor_matched(self):
+        text = "I am a Warp assistant, made by Warp Inc."
+        assert "warp" in find_non_claude_identities(text)
+
+    def test_warp_as_prose_not_matched(self):
+        for text in (
+            "Engage warp speed, Captain.",
+            "The canvas has a slight warp.",
+            "I can help you with time warp calculations.",
+        ):
+            assert find_non_claude_identities(text) == []
+
+    def test_windsurf_with_identity_anchor_matched(self):
+        text = "I'm Windsurf, an AI coding assistant."
+        assert "windsurf" in find_non_claude_identities(text)
+
+    def test_windsurf_as_prose_not_matched(self):
+        text = "My hobby is windsurf and sailing on weekends."
+        assert find_non_claude_identities(text) == []
+
+    def test_claude_mentioning_warp_windsurf_not_matched(self):
+        text = (
+            "I am Claude, made by Anthropic. I can compare with other "
+            "coding tools like Warp and Windsurf if you want."
+        )
+        assert find_non_claude_identities(text) == []

@@ -1008,6 +1008,9 @@ NON_CLAUDE_IDENTITY_KEYWORDS = (
     "glm", "z.ai", "deepseek", "qwen", "minimax", "grok", "gpt",
     # sub2api / Antigravity relay identity (v1.7.5, source-verified)
     "antigravity", "deepmind",
+    # Reverse-proxy dev-tool platforms (v1.7.6, cctest.ai FAQ 2026-04-13)
+    # Strict-tier: common English words, require identity anchor.
+    "warp", "windsurf",
     # Extended ASCII (our additions)
     "zhipu", "tongyi", "ernie", "doubao", "moonshot", "kimi",
     # Chinese brand names (catch Chinese-language responses)
@@ -1020,6 +1023,8 @@ NON_CLAUDE_IDENTITY_KEYWORDS = (
 _NON_CLAUDE_STRICT_KEYWORDS = frozenset({
     "amazon", "kiro", "aws",
     "grok", "gpt", "ernie", "kimi",
+    # v1.7.6 reverse-proxy channels (common English words)
+    "warp", "windsurf",
 })
 
 _NON_CLAUDE_IDENTITY_ANCHOR_ALT = (

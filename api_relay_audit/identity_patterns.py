@@ -97,7 +97,14 @@ NON_CLAUDE_IDENTITY_KEYWORDS = (
     #    from Wei-Shaw/sub2api request_transformer.go:179-186)
     "antigravity",  # sub2api injected identity: "You are Antigravity"
     "deepmind",     # sub2api injected identity: "designed by the Google Deepmind team"
-    # 4. Extended ASCII (our additions — aliases and Chinese-market
+    # 4. Reverse-proxy dev-tool platforms (v1.7.6, sourced from cctest.ai
+    #    FAQ 2026-04-13). Unlike sub2api's Antigravity injection, these
+    #    platforms do NOT inject a literal identity phrase; the channel
+    #    label only occasionally bleeds through — classified as strict
+    #    (anchor-required) because both are common English words.
+    "warp",       # "warp speed", "time warp" in prose
+    "windsurf",   # the watersport
+    # 5. Extended ASCII (our additions — aliases and Chinese-market
     #    substitutes not in hvoy.ai's set)
     "zhipu",     # Zhipu AI, parent of GLM
     "tongyi",    # Alibaba Tongyi, parent of Qwen
@@ -105,7 +112,7 @@ NON_CLAUDE_IDENTITY_KEYWORDS = (
     "doubao",    # ByteDance Doubao
     "moonshot",  # Moonshot AI
     "kimi",      # Moonshot's Kimi product
-    # 5. Chinese brand names (catch Chinese-language responses)
+    # 6. Chinese brand names (catch Chinese-language responses)
     "通义",
     "千问",
     "智谱",
@@ -130,6 +137,9 @@ _STRICT_ASCII_KEYWORDS = frozenset({
     "gpt",    # "unlike GPT" / "not GPT" prose
     "ernie",  # common given name (Sesame Street)
     "kimi",   # common given name
+    # v1.7.6 reverse-proxy dev-tool channels (common English words)
+    "warp",       # "warp speed" / "time warp"
+    "windsurf",   # the watersport
 })
 
 # Identity anchor phrases that must immediately precede (up to ~4 filler
