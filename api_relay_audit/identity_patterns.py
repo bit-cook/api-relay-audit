@@ -137,8 +137,15 @@ _STRICT_ASCII_KEYWORDS = frozenset({
     "gpt",    # "unlike GPT" / "not GPT" prose
     "ernie",  # common given name (Sesame Street)
     "kimi",   # common given name
-    # v1.7.6 reverse-proxy dev-tool channels (common English words)
-    "warp",       # "warp speed" / "time warp"
+})
+
+# v1.7.7: context-strict keywords require BOTH an identity anchor AND
+# a post-keyword identity signal (punctuation or role word like
+# "assistant" / "AI" / "model"). This eliminates false positives like
+# "I am in warp speed mode" or "I am a windsurf instructor" where the
+# keyword is used as a common noun, not a brand identity claim.
+_CONTEXT_STRICT_KEYWORDS = frozenset({
+    "warp",       # "warp speed" / "time warp" in prose
     "windsurf",   # the watersport
 })
 
@@ -162,7 +169,7 @@ def _build_strict_pattern(keyword):
     """Build an anchored regex for a strict keyword.
 
     Matches only when the keyword appears after an identity anchor
-    phrase, optionally separated by 0-4 filler words (articles,
+    phrase, optionally separated by 0-6 filler words (articles,
     adjectives, ``called``, ``named``, etc.).
 
     **v1.7.3 Codex fix**: the filler pattern now uses
@@ -186,6 +193,37 @@ def _build_strict_pattern(keyword):
     )
 
 
+# v1.7.7: post-keyword identity signal for context-strict keywords.
+# Requires that the keyword is followed by punctuation (comma, period,
+# etc.), an identity-role word (assistant, AI, model, ...), or end-of-
+# string. This prevents "I am in warp speed" or "I am a windsurf
+# instructor" from matching while "I am Warp, an AI assistant" still does.
+_IDENTITY_SUFFIX_PATTERN = (
+    r"(?:"
+    r"\s*[,.:;!?)\-—]"
+    r"|\s+(?:assistant|ai|model|bot|chatbot|agent|by|from|made|created|"
+    r"developed|built|designed|trained|powered|an?\s)"
+    r"|\s*$"
+    r")"
+)
+
+
+def _build_context_strict_pattern(keyword):
+    """Build a context-strict pattern for keywords like ``warp`` / ``windsurf``.
+
+    Same as :func:`_build_strict_pattern` but with an additional
+    post-keyword identity-signal requirement. See
+    ``_IDENTITY_SUFFIX_PATTERN`` for the allowed suffixes.
+    """
+    return re.compile(
+        r"(?:" + _IDENTITY_ANCHOR_ALTERNATION + r")"
+        r"\s+(?:(?!not\s|isn'?t\s|aren'?t\s|wasn'?t\s|weren'?t\s|unlike\s)\w+\s+){0,6}?"
+        r"\b" + re.escape(keyword) + r"(?![a-zA-Z])"
+        + _IDENTITY_SUFFIX_PATTERN,
+        re.IGNORECASE,
+    )
+
+
 # Precompile patterns. Strict keywords use anchor-gated regex; lax
 # (distinctive) keywords use the v1.6.2 word-boundary + non-letter
 # lookahead. CJK keywords stay on substring matching.
@@ -194,10 +232,16 @@ _STRICT_ASCII_PATTERNS = tuple(
     for kw in NON_CLAUDE_IDENTITY_KEYWORDS
     if kw in _STRICT_ASCII_KEYWORDS
 )
+_CONTEXT_STRICT_PATTERNS = tuple(
+    (kw, _build_context_strict_pattern(kw))
+    for kw in NON_CLAUDE_IDENTITY_KEYWORDS
+    if kw in _CONTEXT_STRICT_KEYWORDS
+)
 _LAX_ASCII_PATTERNS = tuple(
     (kw, re.compile(r"\b" + re.escape(kw) + r"(?![a-zA-Z])", re.IGNORECASE))
     for kw in NON_CLAUDE_IDENTITY_KEYWORDS
     if kw.isascii() and kw not in _STRICT_ASCII_KEYWORDS
+    and kw not in _CONTEXT_STRICT_KEYWORDS
 )
 _CJK_KEYWORDS = tuple(
     kw for kw in NON_CLAUDE_IDENTITY_KEYWORDS if not kw.isascii()
@@ -222,7 +266,7 @@ _CJK_STRICT_PATTERNS = tuple(
         re.IGNORECASE,
     ))
     for kw in NON_CLAUDE_IDENTITY_KEYWORDS
-    if kw in _STRICT_ASCII_KEYWORDS
+    if kw in _STRICT_ASCII_KEYWORDS or kw in _CONTEXT_STRICT_KEYWORDS
 )
 
 
@@ -270,8 +314,13 @@ def find_non_claude_identities(text: str) -> list:
     for keyword, pattern in _STRICT_ASCII_PATTERNS:
         if pattern.search(text):
             matched.append(keyword)
-    # v1.7.7: CJK-anchor supplementary check for strict keywords.
-    # A strict keyword already matched above won't be double-added.
+    # v1.7.7: context-strict keywords (warp, windsurf) need both anchor
+    # AND post-keyword identity signal.
+    for keyword, pattern in _CONTEXT_STRICT_PATTERNS:
+        if pattern.search(text):
+            matched.append(keyword)
+    # v1.7.7: CJK-anchor supplementary check for strict/context-strict
+    # keywords. A keyword already matched above won't be double-added.
     for keyword, pattern in _CJK_STRICT_PATTERNS:
         if keyword not in matched and pattern.search(text):
             matched.append(keyword)

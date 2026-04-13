@@ -1023,7 +1023,10 @@ NON_CLAUDE_IDENTITY_KEYWORDS = (
 _NON_CLAUDE_STRICT_KEYWORDS = frozenset({
     "amazon", "kiro", "aws",
     "grok", "gpt", "ernie", "kimi",
-    # v1.7.6 reverse-proxy channels (common English words)
+})
+
+# v1.7.7: context-strict keywords need anchor + post-keyword identity signal.
+_NON_CLAUDE_CONTEXT_STRICT_KEYWORDS = frozenset({
     "warp", "windsurf",
 })
 
@@ -1050,15 +1053,41 @@ def _build_non_claude_strict_pattern(kw):
     )
 
 
+_NON_CLAUDE_IDENTITY_SUFFIX = (
+    r"(?:"
+    r"\s*[,.:;!?)\-—]"
+    r"|\s+(?:assistant|ai|model|bot|chatbot|agent|by|from|made|created|"
+    r"developed|built|designed|trained|powered|an?\s)"
+    r"|\s*$"
+    r")"
+)
+
+
+def _build_non_claude_context_strict_pattern(kw):
+    return re.compile(
+        r"(?:" + _NON_CLAUDE_IDENTITY_ANCHOR_ALT + r")"
+        r"\s+(?:(?!not\s|isn'?t\s|aren'?t\s|wasn'?t\s|weren'?t\s|unlike\s)\w+\s+){0,6}?"
+        r"\b" + re.escape(kw) + r"(?![a-zA-Z])"
+        + _NON_CLAUDE_IDENTITY_SUFFIX,
+        re.IGNORECASE,
+    )
+
+
 _NON_CLAUDE_STRICT_PATTERNS = tuple(
     (kw, _build_non_claude_strict_pattern(kw))
     for kw in NON_CLAUDE_IDENTITY_KEYWORDS
     if kw in _NON_CLAUDE_STRICT_KEYWORDS
 )
+_NON_CLAUDE_CONTEXT_STRICT_PATTERNS = tuple(
+    (kw, _build_non_claude_context_strict_pattern(kw))
+    for kw in NON_CLAUDE_IDENTITY_KEYWORDS
+    if kw in _NON_CLAUDE_CONTEXT_STRICT_KEYWORDS
+)
 _NON_CLAUDE_LAX_PATTERNS = tuple(
     (kw, re.compile(r"\b" + re.escape(kw) + r"(?![a-zA-Z])", re.IGNORECASE))
     for kw in NON_CLAUDE_IDENTITY_KEYWORDS
     if kw.isascii() and kw not in _NON_CLAUDE_STRICT_KEYWORDS
+    and kw not in _NON_CLAUDE_CONTEXT_STRICT_KEYWORDS
 )
 _NON_CLAUDE_CJK_KEYWORDS = tuple(
     kw for kw in NON_CLAUDE_IDENTITY_KEYWORDS if not kw.isascii()
@@ -1078,7 +1107,7 @@ _NON_CLAUDE_CJK_STRICT_PATTERNS = tuple(
         re.IGNORECASE,
     ))
     for kw in NON_CLAUDE_IDENTITY_KEYWORDS
-    if kw in _NON_CLAUDE_STRICT_KEYWORDS
+    if kw in _NON_CLAUDE_STRICT_KEYWORDS or kw in _NON_CLAUDE_CONTEXT_STRICT_KEYWORDS
 )
 
 
@@ -1095,7 +1124,12 @@ def find_non_claude_identities(text):
     for kw, pattern in _NON_CLAUDE_STRICT_PATTERNS:
         if pattern.search(text):
             matched.append(kw)
-    # v1.7.7: CJK-anchor supplementary check for strict keywords.
+    # v1.7.7: context-strict keywords (warp, windsurf) need both anchor
+    # AND post-keyword identity signal.
+    for kw, pattern in _NON_CLAUDE_CONTEXT_STRICT_PATTERNS:
+        if pattern.search(text):
+            matched.append(kw)
+    # v1.7.7: CJK-anchor supplementary check for strict/context-strict.
     for kw, pattern in _NON_CLAUDE_CJK_STRICT_PATTERNS:
         if kw not in matched and pattern.search(text):
             matched.append(kw)

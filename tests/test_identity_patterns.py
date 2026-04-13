@@ -390,6 +390,14 @@ class TestWarpWindsurfChannels:
         text = "I am a Warp assistant, made by Warp Inc."
         assert "warp" in find_non_claude_identities(text)
 
+    def test_warp_identity_with_comma(self):
+        """'I am Warp, ...' — keyword followed by comma → identity."""
+        assert "warp" in find_non_claude_identities("I am Warp, an AI assistant.")
+
+    def test_warp_identity_with_period(self):
+        """'I'm Warp.' — keyword followed by period → identity."""
+        assert "warp" in find_non_claude_identities("I'm Warp.")
+
     def test_warp_as_prose_not_matched(self):
         for text in (
             "Engage warp speed, Captain.",
@@ -398,13 +406,30 @@ class TestWarpWindsurfChannels:
         ):
             assert find_non_claude_identities(text) == []
 
+    def test_warp_with_anchor_but_non_identity_context(self):
+        """v1.7.7 Codex fix: 'I am in warp speed mode' has anchor 'I am'
+        and keyword 'warp', but 'speed' is not an identity suffix — this
+        is a false positive that the context-strict pattern must reject."""
+        assert find_non_claude_identities("I am in warp speed mode.") == []
+
     def test_windsurf_with_identity_anchor_matched(self):
         text = "I'm Windsurf, an AI coding assistant."
         assert "windsurf" in find_non_claude_identities(text)
 
+    def test_windsurf_identity_with_by(self):
+        """'I am Windsurf by ...' — 'by' is an identity suffix."""
+        assert "windsurf" in find_non_claude_identities(
+            "I am Windsurf by Codeium.")
+
     def test_windsurf_as_prose_not_matched(self):
         text = "My hobby is windsurf and sailing on weekends."
         assert find_non_claude_identities(text) == []
+
+    def test_windsurf_with_anchor_but_non_identity_context(self):
+        """v1.7.7 Codex fix: 'I am a windsurf instructor' — anchor
+        'I am a' + keyword 'windsurf' + 'instructor' (not identity
+        suffix) → must NOT match."""
+        assert find_non_claude_identities("I am a windsurf instructor.") == []
 
     def test_claude_mentioning_warp_windsurf_not_matched(self):
         text = (
@@ -412,6 +437,10 @@ class TestWarpWindsurfChannels:
             "coding tools like Warp and Windsurf if you want."
         )
         assert find_non_claude_identities(text) == []
+
+    def test_warp_with_ai_suffix_matched(self):
+        """'call me Warp AI' — 'AI' is an identity suffix → match."""
+        assert "warp" in find_non_claude_identities("You can call me Warp AI.")
 
 
 # ---------------------------------------------------------------------------

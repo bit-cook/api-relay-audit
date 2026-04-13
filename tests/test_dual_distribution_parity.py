@@ -87,15 +87,16 @@ def test_identity_keywords_standalone_parity():
 
 
 def test_warp_windsurf_present_in_standalone():
-    """Regression (v1.7.6): warp + windsurf must be present AND strict in
-    standalone audit.py (both are common English words requiring anchor)."""
+    """Regression (v1.7.6→v1.7.7): warp + windsurf must be present AND
+    context-strict in standalone audit.py (common English words requiring
+    anchor + post-keyword identity signal)."""
     standalone = _load_standalone_audit()
     for kw in ("warp", "windsurf"):
         assert kw in standalone.NON_CLAUDE_IDENTITY_KEYWORDS, (
             f"{kw!r} missing from standalone audit.py"
         )
-        assert kw in standalone._NON_CLAUDE_STRICT_KEYWORDS, (
-            f"{kw!r} must be strict in standalone audit.py"
+        assert kw in standalone._NON_CLAUDE_CONTEXT_STRICT_KEYWORDS, (
+            f"{kw!r} must be context-strict in standalone audit.py"
         )
 
 
