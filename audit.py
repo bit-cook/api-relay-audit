@@ -1993,18 +1993,28 @@ def summarize_latencies(latencies):
 
 
 def detect_bimodality(latencies):
-    """Return (is_bimodal, gap_ratio) where gap_ratio = largest_gap / median."""
-    if len(latencies) < 4:
+    """Return (is_bimodal, gap_ratio).
+
+    Only gaps that split the sorted sample into left>=2 and right>=2
+    qualify, so a single outlier at either extreme cannot trip the
+    detector. Requires N>=4.
+    """
+    n = len(latencies)
+    if n < 4:
         return False, 0.0
-    sorted_lats = sorted(latencies)
-    gaps = [sorted_lats[i + 1] - sorted_lats[i]
-            for i in range(len(sorted_lats) - 1)]
-    largest_gap = max(gaps)
     median = statistics.median(latencies)
     if median <= 0:
         return False, 0.0
-    ratio = largest_gap / median
-    return ratio > BIMODAL_GAP_THRESHOLD, ratio
+    sorted_lats = sorted(latencies)
+    # Gap at index i has left cluster i+1 and right cluster n-i-1;
+    # require both >=2, so i in [1, n-3] inclusive.
+    best_ratio = 0.0
+    for i in range(1, n - 2):
+        gap = sorted_lats[i + 1] - sorted_lats[i]
+        ratio = gap / median
+        if ratio > best_ratio:
+            best_ratio = ratio
+    return best_ratio > BIMODAL_GAP_THRESHOLD, best_ratio
 
 
 def classify_variance(stats, is_bimodal):

@@ -34,10 +34,12 @@ Given ``count`` successful samples:
   CV >= 0.5                 -> "high-variance"
 
 Bimodality heuristic: after sorting samples, find the largest gap
-between consecutive values. If that gap divided by the median is
+between consecutive values *that splits the sample into two clusters
+of at least 2 samples each*. If that gap divided by the median is
 greater than ``BIMODAL_GAP_THRESHOLD`` (default 0.5), the distribution
-has a visible cluster break and is flagged bimodal. Requires at least
-4 samples to be meaningful.
+has a visible cluster break and is flagged bimodal. The >=2-per-cluster
+rule prevents a single outlier from being misclassified as a bimodal
+distribution; requires at least 4 samples to be meaningful.
 """
 
 import statistics
@@ -92,24 +94,37 @@ def summarize_latencies(latencies):
 def detect_bimodality(latencies):
     """Return ``(is_bimodal, gap_ratio)``.
 
-    ``gap_ratio`` is largest_gap / median. If it exceeds
-    ``BIMODAL_GAP_THRESHOLD``, the sample is flagged bimodal.
+    ``gap_ratio`` is the largest qualifying gap divided by the median,
+    where a *qualifying* gap is one that splits the sorted sample into
+    a left cluster of >=2 and a right cluster of >=2. A single outlier
+    at either extreme therefore cannot produce a qualifying gap --
+    without this rule, ``[1.0, 1.01, 1.02, 1.80]`` would report
+    ``(True, 0.77)`` from one unlucky slow probe.
+
+    If the ratio exceeds ``BIMODAL_GAP_THRESHOLD``, the sample is
+    flagged bimodal.
 
     Requires at least 4 samples; returns ``(False, 0.0)`` otherwise.
     Also returns ``(False, 0.0)`` when the median is zero (all
     latencies zero, which would mean mocked or broken measurements).
     """
-    if len(latencies) < 4:
+    n = len(latencies)
+    if n < 4:
         return False, 0.0
-    sorted_lats = sorted(latencies)
-    gaps = [sorted_lats[i + 1] - sorted_lats[i]
-            for i in range(len(sorted_lats) - 1)]
-    largest_gap = max(gaps)
     median = statistics.median(latencies)
     if median <= 0:
         return False, 0.0
-    ratio = largest_gap / median
-    return ratio > BIMODAL_GAP_THRESHOLD, ratio
+    sorted_lats = sorted(latencies)
+    # Gap at index i is between sorted_lats[i] and sorted_lats[i+1];
+    # left cluster size = i+1, right cluster size = n-i-1. Require
+    # both >= 2, so i ranges over [1, n-3] inclusive.
+    best_ratio = 0.0
+    for i in range(1, n - 2):
+        gap = sorted_lats[i + 1] - sorted_lats[i]
+        ratio = gap / median
+        if ratio > best_ratio:
+            best_ratio = ratio
+    return best_ratio > BIMODAL_GAP_THRESHOLD, best_ratio
 
 
 def classify_variance(stats, is_bimodal):

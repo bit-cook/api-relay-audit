@@ -81,6 +81,43 @@ class TestDetectBimodality:
         assert is_bimodal is False
         assert ratio == 0.0
 
+    def test_n4_single_outlier_not_bimodal(self):
+        """Codex review 2026-04-18: a single slow probe among 3 fast
+        ones must NOT be classified as bimodal. The exact case from
+        the review: [1.00, 1.01, 1.02, 1.80] would report
+        (True, ~0.77) under the old max-gap rule; under the
+        cluster-size>=2 rule, only the middle split (i=1, 2+2) is
+        considered, gap=0.01, ratio~0.01."""
+        is_bimodal, ratio = detect_bimodality([1.00, 1.01, 1.02, 1.80])
+        assert is_bimodal is False
+        assert ratio < 0.5
+
+    def test_n4_true_bimodal_still_detected(self):
+        """A genuine 2+2 split at N=4 must still be caught.
+        [1.00, 1.01, 1.80, 1.82] splits cleanly: left {1.00, 1.01},
+        right {1.80, 1.82}, gap=0.79, median=1.405, ratio~0.56."""
+        is_bimodal, ratio = detect_bimodality([1.00, 1.01, 1.80, 1.82])
+        assert is_bimodal is True
+        assert ratio > 0.5
+
+    def test_n5_extreme_outlier_not_bimodal(self):
+        """One slow sample at the top of 5 probes is high-variance,
+        not bimodal. Legal gaps are at i=1 and i=2 only; the largest
+        (extreme) gap at i=3 is excluded because it would leave a
+        right cluster of size 1."""
+        is_bimodal, ratio = detect_bimodality([1.0, 1.01, 1.02, 1.03, 5.0])
+        assert is_bimodal is False
+        assert ratio < 0.5
+
+    def test_n6_outlier_at_extremes_not_bimodal(self):
+        """Outliers at both ends (size-1 clusters on each side) do
+        not satisfy the >=2-per-cluster rule; the middle is tight, so
+        no legal gap crosses the threshold."""
+        is_bimodal, ratio = detect_bimodality(
+            [0.1, 1.00, 1.01, 1.02, 1.03, 10.0])
+        assert is_bimodal is False
+        assert ratio < 0.5
+
 
 # ---------------------------------------------------------------------------
 # classify_variance
