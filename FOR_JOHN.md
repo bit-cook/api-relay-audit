@@ -778,3 +778,40 @@ D 的 insight:**真正的 Claude 响应会自称 Claude / 提到 Anthropic**;被
 3. 风险矩阵现在是 6D + d1i/d2i + `any_step_crashed` catch-all
 4. CLAUDE.md 已同步到 11-step/6D/v1.7.5
 5. 本 session 和上一 session 加起来:**17 个 bug 被 review 循环捕获**。数据持续支撑"非平凡 PR 必须走 review 循环"这个结论
+
+
+## 2026-04-18 session: v1.8 Infrastructure Audit Layer(Step 12 + 13)
+
+### 做了什么
+
+在 feature branch `feat/v1.8-infra-audit-layer` 上加了两个全新的 step,定位为 **informational only**,不喂 6D 风险矩阵:
+
+| Commit | Scope | 内容 |
+|--------|-------|------|
+| `17387b0` | Step 12 | **Infra Fingerprint** — 3 个未认证 GET 探测(`/`, `/v1/models`, `/nonexistent-abc12345xyz`)+ 签名库匹配(new-api / one-api / lobechat-relay / fastgpt / cloudflare / nginx-raw / caddy-raw)+ 多数投票置信度(confirmed / tentative / unknown) |
+| `3339bc1` | Step 13 | **Latency Variance** — N=10 个 identical `max_tokens=8` 探测,算 min/median/max/stdev/CV + largest-gap/median 双峰启发式。verdict = stable / variable / high-variance / bimodal / inconclusive |
+
+### 为什么选这两个而不是其他三个候选
+
+帕累托前沿选型。原候选池:(1) LLMmap 主动指纹,(2) 延迟方差,(3) Lite 能力基准,(4) ICP 备案 / 基础设施指纹。结论:
+
+- **(1) LLMmap Pro**: PyTorch + transformers 4.5GB 依赖,破坏 dual-distribution 零依赖不变式,放 v2.5+
+- **(3) 能力基准**: 2-3 周工期,需要 GPQA 子集 + 评分器 + 成本模型,放 v2.0
+- **(2) + (4) 一起做**: 都是 pure stdlib,都是信息层(不动风险矩阵),互相配套(框架指纹 + 时延指纹 = 运营方画像)→ v1.8
+
+### 技术要点
+
+1. **双分布不变式保住了**。`audit.py`(standalone)里加了 Section 3f(framework signatures)和 Section 3g(latency stats),对应 `scripts/audit.py` 的 module import。Parity test(`test_dual_distribution_parity.py::test_risk_matrix_character_identical`)继续 green,因为风险矩阵那块 block 字节级零变动
+2. **原子 commit 纪律**。每个 step 的 module / tests / scripts wiring / standalone sync 分别 commit,report renumbering(Overall Rating 从 "12." → "13." → "14.")也随每个 commit 同步,保证任何一个 commit checkout 都是 self-consistent report
+3. **双峰启发式的选择**。没用 Hartigan dip test 或 GMM,因为 stdlib 里没有,而且 N=10 的样本量两者都不 robust。最终用 largest-gap / median > 0.5 的简单几何规则,tests 里用 cluster 1 (~1s) + cluster 2 (~5s) 验证命中,CV 低于 0.1 的 stable 分布不会误触发
+4. **为什么 informational only**。Network jitter / 上游 warming / 区域故障切换都能在诚实 relay 上制造高方差,所以把 bimodal / high-variance 放进 D 矩阵会出 false positive。v1.8 的合同是:向 operator 展示 signal,由 operator 去 cross-reference Step 5 identity + Step 12 框架。未来如果有足够多 honest-relay 基线数据,可以考虑把这两项提升成 D7/D8
+
+### 给下次 session 的你
+
+1. **本 session 结束状态**:2 个 atomic commit 已落地(`17387b0` Step 12,`3339bc1` Step 13),branch = `feat/v1.8-infra-audit-layer`
+2. **537/537 tests pass**(新增 24 个 infra_fingerprint + 20 个 latency_variance),parity test green
+3. 还没 push 到 origin,**也没 merge 到 master**。docs(CLAUDE.md / FOR_JOHN.md / ROADMAP.md / README.md)会在下一个 commit 统一收尾
+4. 下一步工作优先级:
+   - **先 merge v1.8 到 master** 再开新 step,不要再平行开 branch(branch drift 是 dual-distribution 项目的大敌)
+   - **v2.0: 能力基准** — 跑小 GPQA / MMLU 子集,算命中率 delta,是"模型替换"的直接检测
+   - **v2.5: LLMmap Pro** — 如果真的要做,得想清楚怎么和零依赖不变式共存(可能要走 optional extra: `pip install api-relay-audit[deep]`)

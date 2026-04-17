@@ -28,7 +28,7 @@ python audit.py --key <你的KEY> --url <中转站地址> --output report.md
 python audit.py --key <你的KEY> --url <中转站地址> --profile web3 --output report.md
 ```
 
-**产出**:一份结构化的 Markdown 报告,顶部是整体风险汇总(LOW / MEDIUM / HIGH),下面是每一步的详细结果。见下方 [报告示例](#报告示例) 和 [11 步审计](#11-步审计)。
+**产出**:一份结构化的 Markdown 报告,顶部是整体风险汇总(LOW / MEDIUM / HIGH),下面是每一步的详细结果。见下方 [报告示例](#报告示例) 和 [13 步审计](#13-步审计)。
 
 ### 👥 适合谁用
 
@@ -55,11 +55,12 @@ python audit.py --key <你的KEY> --url <中转站地址> --profile web3 --outpu
 
 | 版本 | 核心内容 |
 |---|---|
+| **v1.8** (2026-04-18) | **Step 12 框架指纹**(one-api / new-api / lobechat / fastgpt / cloudflare / nginx / caddy 签名库 + 多数投票)+ **Step 13 延迟方差**(N=10 identical probe 的 CV 与双峰启发式)。两个 step 都是 informational only,不入 6D 风险矩阵 |
 | **v2.3** (2026-04-11) | **Step 10 流完整性**(Anthropic SSE 事件白名单 + usage 单调性 + thinking 签名有效性)+ **Step 11 Web3 Prompt 注入**(3 个 SlowMist 签名隔离探针)+ **`--profile` 选择器**(general / web3 / full)+ 6D 风险矩阵 |
 | **v2.2** (PR 1 of v3) | **Step 9 错误响应泄漏**(AC-2 adjacent,7 个故意破坏的请求 + 凭证回显扫描)+ 4D 风险矩阵 + LiteLLM issue tracker 溯源的 8+ regex |
 | **v2** | **Step 8 工具调用改写检测**(AC-1.a 拼写投毒 / `pip install requests → reqeusts`)+ 3D 风险矩阵 + `--warmup N` AC-1.b 部分缓解 |
 
-### 📋 11 步审计
+### 📋 13 步审计
 
 | # | 检测项 | 针对攻击 |
 |---|---|---|
@@ -74,6 +75,8 @@ python audit.py --key <你的KEY> --url <中转站地址> --profile web3 --outpu
 | 9 | 错误响应泄漏 (AC-2 adjacent) | 7 个故意破坏的请求,扫描错误体/响应头的凭证回显/上游 URL/环境变量/栈追踪/LiteLLM 内部字段/Bedrock guardrail PII echo |
 | 10 | 流完整性 (AC-1 SSE 层) | Anthropic 流请求 + 4 个不变量检测(事件白名单 / usage 单调性 / usage 一致性 / thinking 签名有效性) |
 | 11 | Web3 Prompt 注入(`--profile web3` 专属) | 3 个 SlowMist 签名隔离探针(转账指引 / 签名拒绝 / 私钥泄漏拒绝) |
+| 12 | **基础设施指纹(informational)** | 3 个未认证 GET 探测 + 7 框架签名库(new-api / one-api / lobechat / fastgpt / cloudflare / nginx / caddy)+ 多数投票置信度 |
+| 13 | **延迟方差(informational)** | N=10 identical 探针,计算 CV + largest-gap/median 双峰启发式,stable / variable / high-variance / bimodal / inconclusive |
 
 ### 📊 报告示例
 
@@ -109,7 +112,20 @@ python audit.py --key <你的KEY> --url <中转站地址> --profile web3 --outpu
 | missing_messages | 400  | 🟢 none    | —            |
 ...
 
-## 12. Overall Rating
+## 12. Infrastructure Fingerprint
+
+Relay framework identified: **one-api** (confirmed by multiple probes).
+Informational only in v1.8.
+
+## 13. Latency Variance
+
+| Metric | Value |
+|--------|-------|
+| successful probes | 10 / 10 |
+| coefficient of variation | 0.087 |
+| verdict | `stable` |
+
+## 14. Overall Rating
 
 ### HIGH RISK
 
@@ -120,12 +136,12 @@ maps onto the attacker's credential-collection surface. **Do not use.**
 
 ### 🏗 架构摘要
 
-- **双分发模型**:同一份 11 步审计逻辑以两种并行形式发布
-  - `audit.py` — 零依赖单文件版(~2500 行),只用 curl,一条 `curl -sO` 下载 + `python audit.py` 运行
+- **双分发模型**:同一份 13 步审计逻辑以两种并行形式发布
+  - `audit.py` — 零依赖单文件版(~2900 行),只用 curl,一条 `curl -sO` 下载 + `python audit.py` 运行
   - `api_relay_audit/` + `scripts/audit.py` — 模块化版,`httpx` + 完整 pytest 测试,开发者路径
   - `test_dual_distribution_parity.py` 强制两边风险矩阵字节级一致
-- **6D 风险矩阵**:D1 token 注入 / D2 指令覆盖 / D3 工具调用改写 / D4 错误响应泄漏 / D5 流完整性异常 / D6 Web3 注入。任一 D3-D6 触发即 HIGH
-- **`--profile` 选择器**:`general`(Steps 1-10)/ `web3`(+ Step 11)/ `full`(全部)。运行时开关代替 git branch 分叉
+- **6D 风险矩阵**:D1 token 注入 / D2 指令覆盖 / D3 工具调用改写 / D4 错误响应泄漏 / D5 流完整性异常 / D6 Web3 注入。任一 D3-D6 触发即 HIGH。Step 12/13 是 informational only,不入矩阵
+- **`--profile` 选择器**:`general`(Steps 1-10、12、13)/ `web3`(+ Step 11)/ `full`(全部)。运行时开关代替 git branch 分叉
 - **三态判定**:每一步返回 clean / anomaly / **inconclusive**。被 relay 默默吞掉的探针不算 clean,算可疑
 - **基于不变量检测,不是基于签名**:token 计数是不可伪造的整数(Step 3),canary marker 是确定性子串(Step 7),SSE 事件类型是封闭的 schema(Step 10)。工具不找已知坏模式,它验证已知好不变量是否成立
 - **Codex review 循环**:非平凡 PR 至少 2 轮独立 Codex review,本 session 发现 10 个真实 bug 全部修复
@@ -169,6 +185,9 @@ python audit.py --key <KEY> --url <URL> [options]
   --aggressive-error-probes       启用 Step 9 的 256 KB 大 body 探针(可能产生计费)
   --skip-stream-integrity         跳过 Step 10(需要 Anthropic 流支持)
   --skip-web3-injection           跳过 Step 11(仅 --profile web3|full 激活)
+  --skip-infra-fingerprint        跳过 Step 12(框架签名指纹)
+  --skip-latency-variance         跳过 Step 13(延迟方差 + 双峰启发式)
+  --latency-probe-count N         Step 13 的探针次数,默认 10,最小 4
 
 其他:
   --warmup N             审计前先发 N 次无害请求(AC-1.b 请求次数门控部分缓解)
@@ -208,7 +227,7 @@ python audit.py --key <YOUR_KEY> --url <BASE_URL> --output report.md
 python audit.py --key <YOUR_KEY> --url <BASE_URL> --profile web3 --output report.md
 ```
 
-Output: a structured Markdown report with a risk summary (LOW / MEDIUM / HIGH) at the top plus per-step details. See [Example Output](#example-output) and [11-Step Audit](#11-step-audit) below.
+Output: a structured Markdown report with a risk summary (LOW / MEDIUM / HIGH) at the top plus per-step details. See [Example Output](#example-output) and [13-Step Audit](#13-step-audit) below.
 
 ### 👥 Who should use this
 
@@ -236,11 +255,12 @@ See [`ROADMAP.md`](./ROADMAP.md) for the complete shipped feature list, deferred
 
 | Version | Contents |
 |---|---|
+| **v1.8** (2026-04-18) | **Step 12 Infrastructure Fingerprint** (7-framework signature database + majority vote) + **Step 13 Latency Variance** (N=10 CV + gap-ratio bimodality heuristic). Both informational only — NOT fed into the 6D risk matrix. Rationale: Zhang et al., *Real Money, Fake Models*, arXiv:2603.01919 |
 | **v2.3** (2026-04-11) | **Step 10 Stream Integrity** (Anthropic SSE event whitelist + usage monotonicity + thinking signature validity) + **Step 11 Web3 Prompt Injection** (3 SlowMist signature isolation probes) + **`--profile` selector** (general / web3 / full) + 6D risk matrix |
 | **v2.2** (PR 1 of v3) | **Step 9 Error Response Leakage** (AC-2 adjacent, 7 deterministic broken requests + credential echo scan) + 4D risk matrix + 8+ regex patterns sourced from LiteLLM issue tracker |
 | **v2** | **Step 8 Tool-Call Substitution** (AC-1.a typosquat detection: `pip install requests → reqeusts`) + 3D risk matrix + `--warmup N` partial AC-1.b mitigation |
 
-### 11-Step Audit
+### 13-Step Audit
 
 | Step | Test | What it detects |
 |------|------|-----------------|
@@ -255,6 +275,8 @@ See [`ROADMAP.md`](./ROADMAP.md) for the complete shipped feature list, deferred
 | 9 | Error Response Leakage (AC-2 adjacent) | Echoed `Authorization` / API key prefix / upstream URL / env var name / FS path / stack trace / LiteLLM internal field / Bedrock guardrail PII in error responses |
 | 10 | Stream Integrity (AC-1 SSE) | SSE event whitelist + usage monotonicity + thinking signature validity + stream model identity on an Anthropic streaming response |
 | 11 | Web3 Prompt Injection (`profile=web3\|full`) | 3 probes for wallet-safety refusal: transfer guidance / sign-transaction refusal / private key leak refusal. Safe-priority classifier with hard-injected marker override |
+| 12 | Infrastructure Fingerprint (**informational**) | 3 unauthenticated GET probes + framework signature database (new-api / one-api / lobechat-relay / fastgpt / cloudflare / nginx-raw / caddy-raw) + majority-vote confidence |
+| 13 | Latency Variance (**informational**) | N identical minimal probes + descriptive stats + largest-gap/median bimodality heuristic. Detects silent A/B testing between advertised model and cheaper substitute |
 
 <a id="example-output"></a>
 
@@ -292,7 +314,20 @@ A typical run produces a Markdown report that looks like this (abbreviated):
 | missing_messages | 400  | 🟢 none    | —              |
 ...
 
-## 12. Overall Rating
+## 12. Infrastructure Fingerprint
+
+Relay framework identified: **one-api** (confirmed by multiple probes).
+Informational only in v1.8.
+
+## 13. Latency Variance
+
+| Metric | Value |
+|--------|-------|
+| successful probes | 10 / 10 |
+| coefficient of variation | 0.087 |
+| verdict | `stable` |
+
+## 14. Overall Rating
 
 ### HIGH RISK
 
@@ -307,14 +342,14 @@ maps onto the attacker's credential-collection surface. **Do not use.**
 
 #### Dual-distribution model
 
-The same 11-step audit logic ships in two parallel forms, kept byte-identical by a dedicated parity test:
+The same 13-step audit logic ships in two parallel forms, kept byte-identical by a dedicated parity test:
 
-- **Standalone** (`audit.py`): a single ~2500-line file with zero Python dependencies beyond the stdlib. All HTTP goes through `curl` subprocess. One `curl -sO` download + one `python audit.py` run. This is the path most users take.
+- **Standalone** (`audit.py`): a single ~2900-line file with zero Python dependencies beyond the stdlib. All HTTP goes through `curl` subprocess. One `curl -sO` download + one `python audit.py` run. This is the path most users take.
 - **Modular** (`api_relay_audit/` + `scripts/audit.py`): a proper Python package with `httpx` for HTTP, full pytest suite, and per-module docstrings. This is the path developers extend.
 
 Every change to one distribution must be mirrored into the other. `tests/test_dual_distribution_parity.py::test_risk_matrix_character_identical` enforces the invariant at the risk-matrix layer with a byte-for-byte comparison. `tests/test_web3_injection.py::TestWeb3MarkerParity` enforces it at the Web3 probe data layer.
 
-#### 11-step pipeline
+#### 13-step pipeline
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -329,8 +364,10 @@ Every change to one distribution must be mirrored into the other. `tests/test_du
 │  Step 9  Error Response Leakage    AC-2 adjacent, 7 triggers   │
 │  Step 10 Stream Integrity          AC-1 SSE-level, 4 invariants│
 │  Step 11 Web3 Prompt Injection     profile=web3 only, 3 probes │
+│  Step 12 Infrastructure Fingerprint v1.8 — framework signatures│
+│  Step 13 Latency Variance          v1.8 — bimodality heuristic │
 │                                                                │
-│  Overall Rating (6D risk matrix)                               │
+│  Overall Rating (6D risk matrix; Step 12/13 informational only)│
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -413,7 +450,7 @@ api_relay_audit/                     # Modular package (requires httpx)
   web3/                              #   Profile=web3 subpackage
     injection_probes.py              #     Step 11 SlowMist signature isolation
 scripts/
-  audit.py                           #   11-step orchestrator (entry point)
+  audit.py                           #   13-step orchestrator (entry point)
   context-test.py                    #   Standalone context length probe
   extract-data.py                    #   Report → JSON extractor for dashboard
 tests/                               # 493 pytest tests across 15 files
@@ -451,6 +488,9 @@ Skip flags:
   --aggressive-error-probes       Enable 256 KB oversized probe in Step 9 (may incur billing)
   --skip-stream-integrity         Skip Step 10 (needs Anthropic streaming support)
   --skip-web3-injection           Skip Step 11 (only runs under --profile web3|full)
+  --skip-infra-fingerprint        Skip Step 12 (framework signature fingerprint)
+  --skip-latency-variance         Skip Step 13 (latency variance + bimodality heuristic)
+  --latency-probe-count N         Step 13 probe count (default 10, minimum 4)
 
 Other:
   --warmup N             Send N benign requests before the audit

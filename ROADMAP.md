@@ -89,33 +89,64 @@ Practice Guide and hvoy.ai `zzsting88/relayAPI` `claude_detector.py`.
 
 ---
 
+## ✅ Shipped v1.8 — Infrastructure Audit Layer (2026-04-18)
+
+### Step 12: Infrastructure Fingerprint (informational)
+**Commit**: `17387b0` on `feat/v1.8-infra-audit-layer`
+**Module**: `api_relay_audit/infra_fingerprint.py` (~240 LOC, 24 tests)
+**What**: 3 unauthenticated GET probes (`/`, `/v1/models`, `/nonexistent-*`)
++ hand-curated framework signature database (new-api, one-api, lobechat-relay,
+fastgpt, cloudflare, nginx-raw, caddy-raw) + majority-vote confidence
+(confirmed ≥2 hits / tentative 1 hit / unknown 0 hits).
+**Why**: Zhang et al., *Real Money, Fake Models*, arXiv:2603.01919, Table 2
+reports 11 of 17 identified shadow APIs are built on OneAPI/NewAPI forks.
+Knowing the framework lets the operator cross-reference CVEs and assess
+professionalism.
+**Classification**: informational only — does NOT feed into the 6D risk matrix.
+
+### Step 13: Latency Variance (informational)
+**Commit**: `3339bc1` on `feat/v1.8-infra-audit-layer`
+**Module**: `api_relay_audit/latency_variance.py` (~180 LOC, 20 tests)
+**What**: N (default 10) identical `max_tokens=8` probes + descriptive stats
++ gap-ratio bimodality heuristic. Verdict = stable (CV<0.25) / variable
+(0.25≤CV<0.5) / high-variance (CV≥0.5) / bimodal / inconclusive.
+**Why**: silent A/B testing between the advertised model and a cheaper
+substitute produces bimodal latency. Queue multiplexing produces multi-modal.
+Stable low-variance latency is the honest baseline.
+**Classification**: informational only; v1.8 could false-positive on jitter
+and warm-up. Future v2+ may promote bimodality to a D7 dimension once we
+have enough honest-relay baseline data.
+
+---
+
 ## 🔜 Near-term candidates (next 1-2 sessions)
 
 Pick one of these to start the next session. Each is scoped to fit in a
 single session, has a clear spec, and does not require new infrastructure.
 
-### 1. Step 12: Crypto Address Substitution (profile=web3|full)
-**Status**: spec'd, deferred from original v3 PR 2
-**Scope**: ~180 LOC new module + ~30 tests
-**Why**: arXiv §5.2 reports a real case of a relay draining an ETH
-private key. Probe set: ETH USDT contract / BTC Satoshi genesis /
-SOL Token Program / ERC-20 transfer calldata / BTC bech32 address.
-**Strict byte-level classifier** — NO case folding, because ETH
-addresses use EIP-55 checksum mixed case.
-**Dependencies**: none. Byte-level string comparison, no crypto libs.
-**Cost of deferring further**: low — no new adversarial case has been
-reported since the original paper.
-
-### 2. Local one-api Docker real-world validation
+### 1. Local one-api Docker real-world validation
 **Status**: not a coding task — ops / validation exercise
 **Scope**: 30-60 minutes Docker setup + audit run + write-up
 **Why**: generate the first real "before/after" detection rate data by
 running the tool against a clean local one-api deployment. Confirms that
-the 11-step pipeline does not false-positive on a legitimate relay.
+the 13-step pipeline does not false-positive on a legitimate relay, and
+gives Step 12 its first real confirmed-framework hit for ground truth.
 **Dependencies**: Docker + a valid upstream API key. `one-api` source
 is publicly available at `github.com/songquanpeng/one-api`.
 **Output**: a `reports/one-api-clean-baseline.md` file plus a diary entry
-in `FOR_JOHN.md` documenting what Step 9 actually caught.
+in `FOR_JOHN.md` documenting what Step 9/12/13 actually caught.
+
+### 2. Crypto Address Substitution (profile=web3|full)
+**Status**: spec'd, deferred from original v3 PR 2 — DEMOTED from v1.8
+lead because Step 12/13 had clearer Pareto justification
+**Scope**: ~180 LOC new module + ~30 tests
+**Why**: arXiv §5.2 reports a real case of a relay draining an ETH
+private key. Probe set: ETH USDT contract / BTC Satoshi genesis /
+SOL Token Program / ERC-20 transfer calldata / BTC bech32 address.
+**Strict byte-level classifier** — NO case folding (EIP-55 mixed case).
+**Dependencies**: none. Byte-level string comparison, no crypto libs.
+**Cost of deferring further**: low — no new adversarial case reported
+since the original paper.
 
 ### 3. MistTrack AML integration (profile=web3|full, optional)
 **Status**: sketched in SlowMist OpenClaw Practice Guide, not started
