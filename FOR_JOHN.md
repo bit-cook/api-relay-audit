@@ -806,12 +806,41 @@ D 的 insight:**真正的 Claude 响应会自称 Claude / 提到 Anthropic**;被
 3. **双峰启发式的选择**。没用 Hartigan dip test 或 GMM,因为 stdlib 里没有,而且 N=10 的样本量两者都不 robust。最终用 largest-gap / median > 0.5 的简单几何规则,tests 里用 cluster 1 (~1s) + cluster 2 (~5s) 验证命中,CV 低于 0.1 的 stable 分布不会误触发
 4. **为什么 informational only**。Network jitter / 上游 warming / 区域故障切换都能在诚实 relay 上制造高方差,所以把 bimodal / high-variance 放进 D 矩阵会出 false positive。v1.8 的合同是:向 operator 展示 signal,由 operator 去 cross-reference Step 5 identity + Step 12 框架。未来如果有足够多 honest-relay 基线数据,可以考虑把这两项提升成 D7/D8
 
-### 给下次 session 的你
+### v1.8 Codex review 闭环(同日追加)
 
-1. **本 session 结束状态**:2 个 atomic commit 已落地(`17387b0` Step 12,`3339bc1` Step 13),branch = `feat/v1.8-infra-audit-layer`
-2. **537/537 tests pass**(新增 24 个 infra_fingerprint + 20 个 latency_variance),parity test green
-3. 还没 push 到 origin,**也没 merge 到 master**。docs(CLAUDE.md / FOR_JOHN.md / ROADMAP.md / README.md)会在下一个 commit 统一收尾
+初始 v1.8 落地后立刻跑了一轮独立 Codex 审查(`codex exec`,default model)。**三档 findings 全部处理,verdict = minor-fixes-needed → 零残留**:
+
+| 严重度 | 问题 | 决策 | commit |
+|---|---|---|---|
+| 🔴 HIGH | Step 12 aggregate 用多数投票,edge-layer 信号(cf-ray / Server: cloudflare)会在 3 个 probe 上全部命中,drown out 仅在 `/` 命中的 app-layer 信号(one-api / new-api),结果把"Cloudflare 后面的 one-api"误报为纯 cloudflare | **Pareto 前沿分析后延后到 v1.8.1**:当前 Step 12 是 informational-only,per-probe 结果仍保留 app-layer 识别,只是聚合层面丢失。真修复(app/edge 分层返回 `{app, edge}` 元组)要改 `aggregate_framework` 签名 + audit.py wiring + 报告渲染 + 所有 call site。拿 测试锁定现行行为(`test_one_api_behind_cloudflare_aggregates_as_cloudflare` + `test_new_api_behind_cloudflare_aggregates_as_cloudflare`),标记为"已知限制",让任何未来改动必须 deliberate | `d0fb5d9` 文档化 |
+| 🟡 MEDIUM | `detect_bimodality` 在 N=4 单 outlier 上假阳性:`[1.00, 1.01, 1.02, 1.80]` 返回 `(True, ~0.77)`——一个慢 probe 就判 bimodal,不合理 | **立即修**。规则改成:gap 搜索只看左右两侧都有 ≥2 样本的切分点。N=4 只 legal 中间切(2+2),outlier 场景直接被排除;真 2+2 分布(`[1.00, 1.01, 1.80, 1.82]`)仍然命中。双分布同步 | `4db33b7` |
+| 🟢 LOW | 测试覆盖盲区:(1) app/edge 混合场景无断言,(2) 3 成功 / 7 错误的部分成功能否 reach classified verdict,(3) Step 12/13 的常量和聚合规则未走 parity 测试——允许一边改、另一边不改,悄悄 bifurcate detection behavior | **全部补上**。新增 5 个测试,含 N=4 outlier、N=4 真双峰、N=5/N=6 extreme outlier 的 cluster-size 规则、3succ/7err 的 CV-based verdict、Step 12/13 常量 dual-distribution parity | `d0fb5d9` |
+
+### HIGH 为什么不立即改:Pareto 推理
+
+候选 5 种方案,横轴工程成本 / 纵轴 false-positive 降低:
+
+| 选项 | 工程成本 | FPR 减益 | 信息架构 |
+|---|---|---|---|
+| A: 改文案,明示"aggregate 只是边缘推断" | 0.2 | 0 | 不动 |
+| B: aggregate 返回 `Counter` | 1 | 中 | 向后兼容打破 |
+| C: app-layer + edge-layer 分层返回 | 3 | 高 | clean,但破坏多个 call site |
+| D: 加权多数(app > edge) | 2 | 中高 | 隐式 heuristic,难解释 |
+| E: 先测,有真实 baseline 数据再决定 | 0.1(测试) + 将来 | 未知 | 留 option |
+
+**选 E 的理由**:Step 12 已经标为 informational-only,per-probe 层面仍然保留了 one-api / new-api 识别,operator 真要追 app-layer identity 还能看到。聚合层面丢失不造成 security false negative(不进风险矩阵),只是 operator-facing display 不够精细。真要改,应该带着至少一个 Cloudflare-fronted relay 的真实数据,否则我们是在猜 heuristic。把测试钉住当前行为,让任何未来想改的人必须 deliberate。
+
+### Codex review 计数器 +1
+
+加上本次 v1.8 round,累计 **6 轮独立 Codex review,发现 18 个真实 bug / limitation**。continuing 数据支撑"非平凡 PR 必须走 review 循环"的结论。
+
+### 给下次 session 的你(更新)
+
+1. **本 session 结束状态**:5 个 commit 已落地(`17387b0` Step 12,`3339bc1` Step 13,`308f980` docs,`4db33b7` MEDIUM fix,`d0fb5d9` LOW tests),**已 merge 到 master**,`origin/master` 推到 v1.8 完整版
+2. **546/546 tests pass**(新增 24 infra + 20 latency + 5 Codex LOW coverage = 49 新测试),parity test green
+3. v1.8.1 backlog(已 ROADMAP 登记):app-layer vs edge-layer 分层返回,条件是收集到至少一个 Cloudflare-fronted relay 的真实 fingerprint 数据
 4. 下一步工作优先级:
-   - **先 merge v1.8 到 master** 再开新 step,不要再平行开 branch(branch drift 是 dual-distribution 项目的大敌)
+   - **本地 one-api Docker 实测**(ROADMAP 近期候选 #1)——能同时给 Step 12/13 初始 baseline + 验证 v1.8.1 是否真的需要
+   - **Crypto address substitution**(近期 #2)——spec 齐全,180 LOC,30 tests
    - **v2.0: 能力基准** — 跑小 GPQA / MMLU 子集,算命中率 delta,是"模型替换"的直接检测
    - **v2.5: LLMmap Pro** — 如果真的要做,得想清楚怎么和零依赖不变式共存(可能要走 optional extra: `pip install api-relay-audit[deep]`)

@@ -6,7 +6,7 @@ item has a short rationale so future contributors (including future
 iterations of the author) can quickly reconstruct why a thing is or is not
 on the list.
 
-**Last updated**: 2026-04-14 (session ending at commit `9e25935`)
+**Last updated**: 2026-04-18 (session ending at commit `d0fb5d9`, v1.8 + Codex review closed)
 
 **Threat model anchor**: Liu et al., *Your Agent Is Mine: Measuring
 Malicious Intermediary Attacks on the LLM Supply Chain*, arXiv:2604.08407.
@@ -117,12 +117,59 @@ Stable low-variance latency is the honest baseline.
 and warm-up. Future v2+ may promote bimodality to a D7 dimension once we
 have enough honest-relay baseline data.
 
+### v1.8 Codex review cycle (same-day follow-up, 2026-04-18)
+**Commits**: `4db33b7` (MEDIUM fix), `d0fb5d9` (LOW coverage + HIGH known-limitation docs)
+**Verdict**: minor-fixes-needed → closed. 6th Codex review round shipped on this
+repo, cumulative 18 real bugs/limitations found across the loop.
+- **HIGH** (app-layer drowned by edge-layer on aggregate): **deferred to v1.8.1**
+  per Pareto analysis. Current Step 12 is informational-only; per-probe result
+  still preserves one-api / new-api identity; only the majority-vote aggregate
+  loses it. Fix requires changing `aggregate_framework` signature + all call
+  sites + report renderer, which warrants real Cloudflare-fronted relay data
+  before committing to the layer split. Current behavior locked by
+  `test_one_api_behind_cloudflare_aggregates_as_cloudflare` +
+  `test_new_api_behind_cloudflare_aggregates_as_cloudflare`.
+- **MEDIUM** (N=4 single-outlier bimodality false positive): **fixed**. Gap
+  search restricted to interior splits where both sides have ≥2 samples.
+  `[1.00, 1.01, 1.02, 1.80]` now returns `(False, ~0.01)` — the single outlier
+  is correctly treated as high-variance, not bimodal. Genuine 2+2 distributions
+  `[1.00, 1.01, 1.80, 1.82]` still fire. Dual-distribution parity preserved.
+- **LOW** (missing test coverage): **fixed**. 5 new tests — N=4 outlier +
+  N=4 true bimodal + N=5/N=6 extreme-outlier cluster-size rule + 3-success /
+  7-error partial-success CV verdict + Step 12/13 constants dual-distribution
+  parity (FRAMEWORK_SIGNATURES, INFORMATIVE_HEADERS, _BODY_SCAN_LIMIT,
+  BIMODAL_GAP_THRESHOLD, CV cutoffs, DEFAULT_PROBE_COUNT).
+- **Final test count**: 546/546 passing (v1.7.7 baseline 493 → v1.8 ship 537
+  → v1.8 Codex follow-up 546, +53 net for v1.8).
+
 ---
 
 ## 🔜 Near-term candidates (next 1-2 sessions)
 
 Pick one of these to start the next session. Each is scoped to fit in a
 single session, has a clear spec, and does not require new infrastructure.
+
+### 0. v1.8.1 — app-layer vs edge-layer framework separation
+**Status**: deferred from v1.8 Codex review HIGH finding (2026-04-18)
+**Precondition**: at least one real Cloudflare-fronted one-api or new-api
+endpoint audit result on file. Without real data, any layer-split heuristic
+is a guess.
+**Scope**: ~60 LOC refactor — partition `FRAMEWORK_SIGNATURES` into
+`APP_LAYER_FRAMEWORKS = {"one-api", "new-api", "lobechat-relay", "fastgpt"}`
+and `EDGE_LAYER_FRAMEWORKS = {"cloudflare", "nginx-raw", "caddy-raw"}`.
+`aggregate_framework` returns `{"app": (framework, confidence), "edge":
+(framework, confidence)}` tuple instead of a single `(framework, confidence)`.
+Report renderer displays both layers with distinct labels.
+**Dual-distribution impact**: large. `aggregate_framework` signature change
+affects `scripts/audit.py` wiring + standalone `audit.py` inlined copy +
+report renderer + all 4 existing aggregate tests (must update assertions).
+**Parity regression test**: add a new test confirming that a Cloudflare-
+fronted one-api landing page returns `{"app": ("one-api", "tentative"),
+"edge": ("cloudflare", "confirmed")}` — this is the HIGH-finding scenario
+we want to NOT lose.
+**Cost of deferring further**: zero if operators don't hit this case in
+real audits. Every month without a Cloudflare-fronted complaint is evidence
+we can leave it. Revisit when #1 (local Docker validation) runs.
 
 ### 1. Local one-api Docker real-world validation
 **Status**: not a coding task — ops / validation exercise
