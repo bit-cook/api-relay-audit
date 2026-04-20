@@ -7,7 +7,7 @@ across channels (direct / bedrock / vertex / reverse-proxy).
 
 Usage:
     set ANTHROPIC_API_KEY=sk-ant-...
-    python scripts/verify_signature_schema.py
+    python scripts/experiments/verify_signature_schema.py
 
 Output: `reports/signature-schema-probe.txt` (hex dumps + parsed field
 tuples + 3-run stability diff). Read the report and decide:
@@ -18,6 +18,12 @@ tuples + 3-run stability diff). Read the report and decide:
     → abandon item 5, fall back to header-presence fingerprinting.
 
 Zero deps: stdlib only, curl-free (uses urllib). Python 3.7+.
+
+Status: archived under ``scripts/experiments/`` on 2026-04-20 as a
+one-shot investigation artifact. Not part of the production audit
+pipeline; no module imports it. Kept in-tree so the investigation is
+reproducible; move to a separate gist or delete if/when ROADMAP item
+5 closes definitively.
 """
 
 import base64
@@ -33,7 +39,12 @@ from pathlib import Path
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-opus-4-5"  # any thinking-capable model is fine
-OUT_DIR = Path(__file__).resolve().parent.parent / "reports"
+# Archival note (2026-04-20): file lives at
+# ``scripts/experiments/<this file>`` so repo root is 3 levels up
+# (was 2 before the move; Codex review flagged the drift).
+# Keeps the report at ``<repo_root>/reports/signature-schema-probe.txt``
+# regardless of where the script is invoked from.
+OUT_DIR = Path(__file__).resolve().parent.parent.parent / "reports"
 OUT_FILE = OUT_DIR / "signature-schema-probe.txt"
 
 # A prompt that reliably triggers extended-thinking content blocks.

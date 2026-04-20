@@ -6,7 +6,7 @@ item has a short rationale so future contributors (including future
 iterations of the author) can quickly reconstruct why a thing is or is not
 on the list.
 
-**Last updated**: 2026-04-20 (session closes v1.8 Codex review #2 round 2, 562/562 passing)
+**Last updated**: 2026-04-20 (handoff-prep cleanup: Tier A archival shipped, v1.9 decouplings logged, 562/562 passing)
 
 **Threat model anchor**: Liu et al., *Your Agent Is Mine: Measuring
 Malicious Intermediary Attacks on the LLM Supply Chain*, arXiv:2604.08407.
@@ -278,6 +278,145 @@ rather than real bugs — the v1.8.1 fixes themselves are correct,
 these tests just harden the regression guard. Revisit when the next
 feature cycle starts (same session that picks up 2.5 over-engineering
 prune is a natural fit).
+
+### 2.45 v1.9 — controlled-blast decouplings (handoff-prep triage, 2026-04-20)
+
+**Status**: audit done 2026-04-20 before front-end handoff.
+**Shipped in this audit**: Tier A archival — `scripts/verify_signature_
+schema.py` moved to `scripts/experiments/` (zero blast on imports, no
+module references the archived script). Codex review on the move
+caught one latent path-drift bug: `OUT_DIR = Path(__file__).parent.
+parent / "reports"` would have written to `scripts/reports/` rather
+than `<repo_root>/reports/` after the rename. Fixed in the same
+branch by bumping the anchor to `.parent.parent.parent`. Regression
+lesson: whenever a script moves deeper into the tree, `__file__`-
+relative paths inside it must be re-verified.
+**Deferred to v1.9**: four real decoupling candidates ranked by
+blast-radius vs. leverage.
+
+1. **Extract `REFUSAL_MARKERS` + `_looks_like_refusal`**
+   from `scripts/audit.py` (lines 81, 156-158) into a new module
+   `api_relay_audit/refusal.py`.
+   **Scope** (verified via grep, 2026-04-20 Codex review):
+   - 3 call sites of `_looks_like_refusal` in `scripts/audit.py`
+     (lines 178, 403, 559) — NOT 6 as initially stated
+   - `tests/test_refusal_detector.py` already imports
+     `modular._looks_like_refusal` directly; a re-export on
+     `scripts/audit.py` keeps the test untouched, a hard rename
+     does not
+   - `tests/test_clean_summary_flags.py` does not import the
+     helpers but does exercise Step 4/6 with a `CLEAN_REFUSAL`
+     fixture, so any behavior change in the helper surfaces here
+   - Standalone `audit.py` keeps its inline copy unchanged — the
+     existing `TestRefusalMarkerParity` parity test covers drift
+   **Blast radius**: LOW. Parity test is the regression guard; if
+   it stays green and the test suite passes, the extraction is
+   safe. Recommended approach: re-export on `scripts.audit` so
+   `tests/test_refusal_detector.py` needs zero changes.
+   **Why now-safe**: unlike a client.py / audit.py split, this
+   does NOT require a standalone refactor because the parity
+   strategy already treats refusal markers as "inline on
+   standalone, imported on modular" in principle — we just need
+   to complete that on the modular side.
+   **Prereq**: none.
+   **Time estimate**: 25-30 min.
+   **Why deferred past this handoff**: medium-value, not zero-
+   blast. A typo in an import path or a missed call site would
+   produce a silent refusal-detection regression; worth a
+   proper code review rather than a 30-min squeeze before
+   handoff.
+
+2. **Split `api_relay_audit/client.py` (924 LOC)**
+   into `client/transport.py` + `client/format_detection.py` +
+   `client/stream.py` + `client/__init__.py` (re-exports).
+
+   **Codex review follow-up (2026-04-20)**: my original "HIGH
+   blast / blocked on dual-distribution policy" framing was over-
+   pessimistic. A cheaper incremental path exists:
+
+     *Phase 2a — transport extraction only, facade-preserved.*
+     Move just the httpx-vs-curl transport code into an internal
+     `api_relay_audit/_transport.py` helper module and have
+     `api_relay_audit/client.py` import from it. `APIClient`
+     class stays in `client.py`; all public imports stay valid.
+     No test changes. Standalone `audit.py` stays flat because
+     modular's public API is unchanged — the parity constraint
+     does not care what's behind the facade. Blast radius: LOW.
+     Time estimate: 60-90 min.
+
+   After 2a lands and stabilizes, Phase 2b (stream extraction)
+   and 2c (format-detection extraction) can follow the same
+   pattern. Only Phase 2d ("promote the internal modules to
+   public re-exports under `api_relay_audit.client.*`") needs
+   the dual-distribution policy decision, because that is when
+   the standalone flat copy starts diverging.
+
+   **Scope (Phase 2a only)**: ~300 LOC moved into internal
+   helper + ~30 LOC of import rewiring inside `client.py`. No
+   change to public import paths. No change to standalone.
+   **Blast radius (Phase 2a)**: LOW.
+   **Prereq (Phase 2a)**: none.
+   **Time estimate (Phase 2a)**: 60-90 min.
+
+   **Original full-split Phase 2d** (for reference): HIGH blast,
+   blocked on dual-distribution policy (keep / deprecate /
+   auto-generate standalone from modular). 2-3 hours plus design.
+
+3. **Split `scripts/audit.py` (1536 LOC)**
+   into `scripts/steps/` subdirectory, one file per numbered step.
+   **Scope**: ~1200 LOC moved + `scripts/audit.py` becomes a thin
+   orchestrator that imports from `scripts.steps.step_NN_*`.
+   **Blast radius**: MEDIUM-HIGH. The `test_risk_matrix_character_
+   identical` parity test slices text between `# Overall rating`
+   and `# Output` comments; if the split moves those comments into
+   a step module the parity test breaks unless we relocate the slice
+   markers.
+   **Prereq**: same dual-distribution decision as #2; also needs the
+   parity test's slice markers redesigned.
+   **Time estimate**: 3-4 hours.
+
+4. **Extract `web/` dashboard to a separate repo**
+   `api-relay-audit-dashboard`.
+
+   **Codex review follow-up (2026-04-20)**: my "1h mechanical"
+   estimate was wrong — `web/` has live wiring into the rest of
+   the repo that must be re-established after extraction:
+
+   - `.github/workflows/pages.yml` deploys `web/**` to GitHub
+     Pages; triggered by `paths: [web/**]`. Either (a) remove
+     this workflow when extracting and rewire inside the new
+     repo, or (b) keep a thin `web/` symlink/submodule in this
+     repo that still satisfies the paths filter.
+   - `scripts/extract-data.py` has `--output` as a **required
+     flag with no default** (`scripts/extract-data.py:197`);
+     the CLAUDE.md + docstring example just happens to pass
+     `--output ./web/data.json`. After extraction, either the
+     script gains a default pointing at the new repo path or
+     every caller/doc/CI invocation is updated to the new
+     location.
+   - `web/index.html` is 75 KB with inline JS/CSS; splitting
+     into HTML + CSS + JS is a separate frontend task that
+     probably wants to happen IN the new repo rather than this
+     one.
+
+   **Blast radius**: LOW on the Python backend (nothing under
+   `api_relay_audit/*` or `scripts/audit.py` imports the
+   dashboard), but MEDIUM on CI/deployment because the
+   GitHub Pages workflow currently depends on `web/` living
+   in-tree.
+   **Why not now**: defer to the front-end colleague's first-
+   day discussion. They may prefer to keep it in-tree for one
+   more iteration OR prefer a clean extract where they own
+   the new repo from day one. Either answer is reasonable.
+   **Time estimate**: 2-3 hours (extraction + CI rewire +
+   README cross-links), NOT 1 hour.
+
+**Cost of deferring further**: moderate. #1 and the Phase-2a slice of
+#2 are the highest-leverage of the four because they ship real module
+cohesion without touching standalone. Full-split Phase-2d of #2 and
+the whole of #3 are blocked on the dual-distribution decision, which
+is itself ROADMAP 2.5 item #1 (biggest-debt candidate). #4 is a front-
+end colleague conversation, not a backend task.
 
 ### 2.5 v1.9 — over-engineering prune (backlog, handoff-prep triage)
 **Status**: audit done 2026-04-20 before front-end handoff; no deletions
