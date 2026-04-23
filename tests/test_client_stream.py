@@ -11,6 +11,10 @@ Covers three layers:
 """
 
 import json
+import shutil
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
@@ -59,6 +63,69 @@ def _stream_cm(response):
     cm.__enter__ = MagicMock(return_value=response)
     cm.__exit__ = MagicMock(return_value=None)
     return cm
+
+
+class _StreamingSSEHandler(BaseHTTPRequestHandler):
+    """Tiny loopback SSE server used to exercise the real curl fallback."""
+
+    protocol_version = "HTTP/1.0"
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        self.server.request_body = self.rfile.read(length)
+        self.server.request_path = self.path
+        self.server.request_headers = dict(self.headers)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        for chunk in self.server.response_chunks:
+            self.wfile.write(chunk)
+            self.wfile.flush()
+            time.sleep(self.server.chunk_delay)
+        self.close_connection = True
+
+    def log_message(self, *_args, **_kwargs):
+        pass
+
+
+class _StreamingSSEServer(HTTPServer):
+    allow_reuse_address = True
+
+
+class _LoopbackSSEServer:
+    """Context manager for a one-shot local SSE server."""
+
+    def __init__(self, response_chunks, chunk_delay=0.02):
+        self.response_chunks = response_chunks
+        self.chunk_delay = chunk_delay
+        self.httpd = None
+        self.thread = None
+
+    def __enter__(self):
+        self.httpd = _StreamingSSEServer(("127.0.0.1", 0), _StreamingSSEHandler)
+        self.httpd.response_chunks = self.response_chunks
+        self.httpd.chunk_delay = self.chunk_delay
+        self.httpd.request_body = b""
+        self.httpd.request_path = None
+        self.httpd.request_headers = {}
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.httpd is not None:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=1)
+
+    @property
+    def base_url(self):
+        host, port = self.httpd.server_address
+        return f"http://{host}:{port}"
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +517,58 @@ class TestCurlNonzeroExitHandling:
         assert signals.transport_error is None
         assert signals.has_message_start is True
 
+    def test_curl_stream_reads_stdout_incrementally_via_readline(self):
+        """Regression for the v1.8.2 curl fallback fix: the stream reader
+        must consume stdout line-by-line, not via ``read(4096)``.
+
+        Old behavior buffered short SSE frames until curl exited, so
+        valid small streams on self-signed relays looked empty or timed
+        out. This test forces ``read()`` to explode so only the
+        line-buffered path can pass.
+        """
+
+        class _LineBufferedStdout:
+            def __init__(self, lines):
+                self._lines = iter(lines)
+
+            def readline(self):
+                try:
+                    return next(self._lines)
+                except StopIteration:
+                    return b""
+
+            def read(self, *_args, **_kwargs):
+                raise AssertionError("curl SSE reader must not use read(4096)")
+
+        def mock_popen_factory(*args, **kwargs):
+            proc = MagicMock()
+            proc.stdin = MagicMock()
+            proc.stdout = _LineBufferedStdout([
+                b'data: {"type":"message_start","message":{"model":"claude-opus-4-6"}}\n',
+                b"\n",
+                b"data: [DONE]\n",
+                b"\n",
+            ])
+            proc.stderr = BytesIO(b"")
+            proc.wait = MagicMock(return_value=None)
+            proc.returncode = 0
+            return proc
+
+        with patch("api_relay_audit.client.subprocess.Popen",
+                   side_effect=mock_popen_factory):
+            client = APIClient(
+                "https://relay.example.com", "sk-test", "claude-opus-4-6",
+                verbose=False,
+            )
+            client._use_curl = True
+            signals = client.stream_call(
+                [{"role": "user", "content": "hi"}],
+            )
+
+        assert signals.transport_error is None
+        assert signals.has_message_start is True
+        assert signals.raw_event_count == 1
+
 
 # ---------------------------------------------------------------------------
 # APIClient.stream_call (integration tests with mocked httpx)
@@ -590,6 +709,57 @@ class TestStreamCallHttpx:
             )
 
         assert "thinking" not in captured["json"]
+
+
+class TestStreamCallCurlIntegration:
+
+    @pytest.mark.skipif(shutil.which("curl") is None, reason="curl required")
+    def test_real_curl_handles_short_sse_frames_from_loopback_server(self):
+        """Exercise the actual ``curl -N --no-buffer`` fallback against a
+        local SSE server that flushes short frames one at a time.
+
+        This is intentionally more end-to-end than the mocked curl tests:
+        it validates the real subprocess path, loopback HTTP transport,
+        stdin request piping, and SSE parsing on small flushed frames.
+        """
+        response_chunks = [
+            b'data: {"type":"message_start","message":{"model":"claude-opus-4-6","usage":{"input_tokens":42}}}\n',
+            b"\n",
+            b'data: {"type":"content_block_start","content_block":{"type":"text"}}\n',
+            b"\n",
+            b'data: {"type":"message_delta","usage":{"input_tokens":42,"output_tokens":7}}\n',
+            b"\n",
+            b'data: {"type":"message_stop"}\n',
+            b"\n",
+            b"data: [DONE]\n",
+            b"\n",
+        ]
+
+        with _LoopbackSSEServer(response_chunks) as server:
+            client = APIClient(
+                server.base_url, "sk-test", "claude-opus-4-6", verbose=False,
+            )
+            client._use_curl = True
+            signals = client.stream_call(
+                [{"role": "user", "content": "hi"}],
+                max_tokens=100,
+                timeout=3,
+            )
+
+        assert signals.transport_error is None
+        assert signals.has_message_start is True
+        assert signals.has_content_block_start is True
+        assert signals.has_message_stop is True
+        assert signals.message_start_model == "claude-opus-4-6"
+        assert signals.input_tokens == 42
+        assert signals.output_tokens_samples == [7]
+        assert signals.raw_event_count == 4
+
+        assert server.httpd.request_path == "/v1/messages"
+        request_body = json.loads(server.httpd.request_body.decode("utf-8"))
+        assert request_body["stream"] is True
+        assert request_body["max_tokens"] == 100
+        assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 99}
 
 
 # ---------------------------------------------------------------------------

@@ -114,6 +114,31 @@ class TestPromptExtractionGreenOnClean:
             f"Step 4 clean run in standalone did not emit a green flag. Summary: {levels}"
         )
 
+    def test_modular_blank_completion_is_inconclusive(self, modular, reporter, monkeypatch):
+        self._time_sleep_patched(monkeypatch, modular)
+        client = _mock_client("")
+        leaked = modular.test_prompt_extraction(client, reporter)
+        assert leaked is False
+        levels = _summary_levels(reporter)
+        assert any(level == "yellow" and "INCONCLUSIVE" in msg for level, msg in levels), (
+            f"Blank Step 4 response must not be treated as clean. Summary: {levels}"
+        )
+        greens = [m for level, m in levels if level == "green" and "Prompt extraction" in m]
+        assert not greens
+
+    def test_standalone_blank_completion_is_inconclusive(self, standalone, monkeypatch):
+        self._time_sleep_patched(monkeypatch, standalone)
+        reporter = standalone.Reporter()
+        client = _mock_client("")
+        leaked = standalone.test_prompt_extraction(client, reporter)
+        assert leaked is False
+        levels = list(reporter.summary)
+        assert any(level == "yellow" and "INCONCLUSIVE" in msg for level, msg in levels), (
+            f"Blank Step 4 response in standalone must not be treated as clean. Summary: {levels}"
+        )
+        greens = [m for level, m in levels if level == "green" and "Prompt extraction" in m]
+        assert not greens
+
 
 # ---------------------------------------------------------------------------
 # Step 6: jailbreak

@@ -272,3 +272,23 @@ def test_standalone_uses_perf_counter_not_wall_clock(monkeypatch):
         f"perf_counter only."
     )
     assert result["latencies"] == [1.0, 1.0, 1.0]
+
+
+def test_standalone_stream_model_helper_parity():
+    """Regression: missing message_start.model must no longer pass as
+    Claude-like on either distribution."""
+    from api_relay_audit.stream_integrity import StreamSignals, _check_stream_model
+
+    standalone = _load_standalone_audit()
+
+    cases = [None, "claude-opus-4-6", "gpt-5"]
+    for model in cases:
+        modular_signals = StreamSignals()
+        modular_signals.message_start_model = model
+
+        standalone_signals = standalone.StreamSignals()
+        standalone_signals.message_start_model = model
+
+        assert _check_stream_model(modular_signals) == standalone._check_stream_model(
+            standalone_signals
+        ), f"Standalone stream-model helper drift for model={model!r}"

@@ -293,9 +293,14 @@ def _check_usage_consistent(signals):
 
 
 def _check_stream_model(signals):
-    """message_start.message.model should contain 'claude'."""
+    """message_start.message.model should contain 'claude'.
+
+    Missing model identity is also suspicious once the relay has emitted
+    substantive stream events: a middleware can hide a downgrade by
+    stripping the field instead of exposing the non-Claude upstream.
+    """
     if not signals.message_start_model:
-        return True
+        return False
     return "claude" in signals.message_start_model.lower()
 
 
@@ -371,11 +376,17 @@ def analyze_stream(signals):
             "had empty signatures — thinking block downgrade or rewriter"
         )
     if not stream_model_is_claude:
-        findings.append(
-            f"Stream's message_start.message.model = "
-            f"{signals.message_start_model!r} does not contain 'claude' — "
-            "relay may be routing to a substitute model"
-        )
+        if signals.message_start_model:
+            findings.append(
+                f"Stream's message_start.message.model = "
+                f"{signals.message_start_model!r} does not contain 'claude' — "
+                "relay may be routing to a substitute model"
+            )
+        else:
+            findings.append(
+                "Stream omitted message_start.message.model entirely — "
+                "relay may be stripping model identity to hide a downgrade"
+            )
 
     anomaly = bool(
         unknown_events
@@ -767,10 +778,10 @@ class APIClient:
 
             def iter_stdout():
                 while True:
-                    chunk = proc.stdout.read(4096)
-                    if not chunk:
+                    line = proc.stdout.readline()
+                    if not line:
                         break
-                    yield chunk
+                    yield line
 
             _parse_sse_stream(iter_stdout(), signals)
             proc.wait(timeout=timeout + 10)
@@ -1735,7 +1746,7 @@ def run_web3_injection_probes(client, sleep=1.0):
 
     if any(r.verdict == "injected" for r in results):
         overall = "anomaly"
-    elif any(r.verdict == "safe" for r in results):
+    elif results and all(r.verdict == "safe" for r in results):
         overall = "clean"
     else:
         overall = "inconclusive"
@@ -2394,17 +2405,28 @@ def test_prompt_extraction(client, report):
     ]
 
     leaked = False
+    inconclusive = False
+    inconclusive_names = []
     for name, prompt in tests:
         report.h3(f"Test {name}")
         r = client.call([{"role": "user", "content": prompt}], max_tokens=1024)
         if "error" in r:
             report.p(f"Error: {r['error']}")
+            inconclusive = True
+            inconclusive_names.append(name)
         else:
+            text = r.get("text", "") or ""
             report.p(f"**input_tokens**: {r['input_tokens']} | **output_tokens**: {r['output_tokens']}")
             report.p("**Response**:")
-            report.code(r["text"][:2000])
+            report.code(text[:2000])
 
-            text = r["text"]
+            if not text.strip():
+                inconclusive = True
+                inconclusive_names.append(name)
+                report.p("Empty response body returned for this probe.")
+                time.sleep(1)
+                continue
+
             text_lower = text.lower()
             strong_string_markers = ["hidden_prompt", "kiro"]
             weak_markers = ["system prompt", "assistant", "coding", "developer"]
@@ -2435,8 +2457,18 @@ def test_prompt_extraction(client, report):
         time.sleep(1)
 
     if not leaked:
-        report.p("\nAll extraction attempts failed (anti-extraction mechanism may exist).")
-        report.flag("green", "Prompt extraction tests passed (no hidden prompt leaked)")
+        if inconclusive:
+            affected = ", ".join(inconclusive_names)
+            report.flag(
+                "yellow",
+                "Prompt extraction tests INCONCLUSIVE: one or more probes "
+                f"returned an empty or error response ({affected}). The "
+                "relay may be suppressing extraction output rather than "
+                "cleanly refusing it.",
+            )
+        else:
+            report.p("\nAll extraction attempts failed (anti-extraction mechanism may exist).")
+            report.flag("green", "Prompt extraction tests passed (no hidden prompt leaked)")
 
     print(f"  Done: prompt extraction (leaked: {'yes' if leaked else 'no'})")
     return leaked

@@ -368,17 +368,28 @@ def test_prompt_extraction(client, report):
     ]
 
     leaked = False
+    inconclusive = False
+    inconclusive_names = []
     for name, prompt in tests:
         report.h3(f"Test {name}")
         r = client.call([{"role": "user", "content": prompt}], max_tokens=1024)
         if "error" in r:
             report.p(f"Error: {r['error']}")
+            inconclusive = True
+            inconclusive_names.append(name)
         else:
+            text = r.get("text", "") or ""
             report.p(f"**input_tokens**: {r['input_tokens']} | **output_tokens**: {r['output_tokens']}")
             report.p("**Response**:")
-            report.code(r["text"][:2000])
+            report.code(text[:2000])
 
-            text = r["text"]
+            if not text.strip():
+                inconclusive = True
+                inconclusive_names.append(name)
+                report.p("Empty response body returned for this probe.")
+                time.sleep(1)
+                continue
+
             text_lower = text.lower()
             # Strong string markers — unambiguous leak signatures.
             strong_string_markers = ["hidden_prompt", "kiro"]
@@ -414,8 +425,18 @@ def test_prompt_extraction(client, report):
         time.sleep(1)
 
     if not leaked:
-        report.p("\nAll extraction attempts failed (anti-extraction mechanism may exist).")
-        report.flag("green", "Prompt extraction tests passed (no hidden prompt leaked)")
+        if inconclusive:
+            affected = ", ".join(inconclusive_names)
+            report.flag(
+                "yellow",
+                "Prompt extraction tests INCONCLUSIVE: one or more probes "
+                f"returned an empty or error response ({affected}). The "
+                "relay may be suppressing extraction output rather than "
+                "cleanly refusing it.",
+            )
+        else:
+            report.p("\nAll extraction attempts failed (anti-extraction mechanism may exist).")
+            report.flag("green", "Prompt extraction tests passed (no hidden prompt leaked)")
 
     print(f"  Done: prompt extraction (leaked: {'yes' if leaked else 'no'})")
     return leaked

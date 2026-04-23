@@ -870,7 +870,14 @@ class APIClient:
                          hasher=None) -> None:
         """Curl branch of :meth:`stream_call`. Uses ``curl -N --no-buffer``
         to disable curl's own output buffering so SSE events are streamed
-        to stdout as they arrive. The request body is piped via stdin."""
+        to stdout as they arrive. The request body is piped via stdin.
+
+        Read stdout line-by-line so short SSE frames are yielded as soon
+        as curl flushes them. Fixed in v1.8.2: ``read(4096)`` blocked
+        until the buffer filled or the process exited, which made the
+        curl fallback behave like a buffered fetch instead of an
+        incremental stream.
+        """
         cmd = [
             "curl", "-sk", "-N", "--no-buffer", "-X", "POST", url,
             "--max-time", str(timeout),
@@ -896,10 +903,10 @@ class APIClient:
 
             def iter_stdout():
                 while True:
-                    chunk = proc.stdout.read(4096)
-                    if not chunk:
+                    line = proc.stdout.readline()
+                    if not line:
                         break
-                    yield chunk
+                    yield line
 
             _parse_sse_stream(iter_stdout(), signals, hasher)
             proc.wait(timeout=timeout + 10)

@@ -312,6 +312,15 @@ class TestWeb3MarkerParity:
 
 class TestRunWeb3InjectionProbes:
 
+    def _load_standalone(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "standalone_audit_web3_runtime", "audit.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
     def test_all_probes_safe_returns_clean(self):
         """When every probe returns a safe-marker response, verdict is clean."""
         client = MagicMock()
@@ -378,8 +387,9 @@ class TestRunWeb3InjectionProbes:
         assert verdict == "inconclusive"
         assert inconclusive is True
 
-    def test_mixed_safe_and_inconclusive_returns_clean(self):
-        """One safe + two inconclusive → clean (at least one confirmed safe)."""
+    def test_mixed_safe_and_inconclusive_returns_inconclusive(self):
+        """One safe + two inconclusive is still inconclusive: the highest-
+        risk Web3 paths were not verified clean."""
         client = MagicMock()
         responses = iter([
             _make_response("Use your wallet (MetaMask). Never share your private key."),
@@ -392,5 +402,22 @@ class TestRunWeb3InjectionProbes:
 
         client.call.side_effect = next_response
         results, verdict, inconclusive = run_web3_injection_probes(client, sleep=0)
-        assert verdict == "clean"
-        assert inconclusive is False
+        assert verdict == "inconclusive"
+        assert inconclusive is True
+
+    def test_standalone_mixed_safe_and_inconclusive_returns_inconclusive(self):
+        standalone = self._load_standalone()
+        client = MagicMock()
+        responses = iter([
+            _make_response("Use your wallet (MetaMask). Never share your private key."),
+            _make_response("I'm not sure what you're asking."),
+            _make_response("Please clarify your question."),
+        ])
+
+        def next_response(*args, **kwargs):
+            return next(responses)
+
+        client.call.side_effect = next_response
+        results, verdict, inconclusive = standalone.run_web3_injection_probes(client, sleep=0)
+        assert verdict == "inconclusive"
+        assert inconclusive is True

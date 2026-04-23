@@ -198,6 +198,16 @@ class TestAnalyzeStreamAnomaly:
         assert result["verdict"] == "anomaly"
         assert result["stream_model_is_claude"] is False
 
+    def test_missing_stream_model_triggers_anomaly(self):
+        """A relay can hide a downgrade by stripping the model field
+        instead of exposing a non-Claude upstream name."""
+        s = _make_clean_signals()
+        s.message_start_model = None
+        result = analyze_stream(s)
+        assert result["verdict"] == "anomaly"
+        assert result["stream_model_is_claude"] is False
+        assert any("omitted message_start.message.model" in f for f in result["findings"])
+
 
 # ---------------------------------------------------------------------------
 # Inconclusive verdicts
@@ -299,7 +309,7 @@ class TestHelperFunctions:
 
     def test_check_stream_model_empty(self):
         s = StreamSignals()
-        assert _check_stream_model(s) is True
+        assert _check_stream_model(s) is False
 
     def test_check_stream_model_claude_opus(self):
         s = StreamSignals()

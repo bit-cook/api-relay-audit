@@ -230,11 +230,14 @@ def _check_stream_model(signals: "StreamSignals") -> bool:
     """``message_start.message.model`` should contain ``"claude"`` for
     an Anthropic-format streaming response.
 
-    Returns True if the model name looks Claude-like, or if the field
-    was never populated (the "no events received" branch handles that
-    case separately as inconclusive)."""
+    Missing ``message_start.message.model`` is itself suspicious once the
+    relay has emitted substantive events: a middleware can hide a model
+    downgrade simply by stripping the field instead of exposing a
+    non-Claude upstream name. The "no events received" branch is handled
+    earlier in :func:`analyze_stream` as inconclusive.
+    """
     if not signals.message_start_model:
-        return True
+        return False
     return "claude" in signals.message_start_model.lower()
 
 
@@ -336,11 +339,17 @@ def analyze_stream(signals: "StreamSignals") -> dict:
             "had empty signatures — thinking block downgrade or rewriter"
         )
     if not stream_model_is_claude:
-        findings.append(
-            f"Stream's message_start.message.model = "
-            f"{signals.message_start_model!r} does not contain 'claude' — "
-            "relay may be routing to a substitute model"
-        )
+        if signals.message_start_model:
+            findings.append(
+                f"Stream's message_start.message.model = "
+                f"{signals.message_start_model!r} does not contain 'claude' — "
+                "relay may be routing to a substitute model"
+            )
+        else:
+            findings.append(
+                "Stream omitted message_start.message.model entirely — "
+                "relay may be stripping model identity to hide a downgrade"
+            )
 
     anomaly = bool(
         unknown_events
