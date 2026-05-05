@@ -6,12 +6,13 @@ item has a short rationale so future contributors (including future
 iterations of the author) can quickly reconstruct why a thing is or is not
 on the list.
 
-**Last updated**: 2026-04-20 (handoff-prep cleanup: Tier A archival shipped, v1.9 decouplings logged, 562/562 passing)
+**Last updated**: 2026-05-03 (cctest.ai 复查衍生 v1.9 候选项追加，§2.6；ROADMAP-only，无代码改动，562/562 仍 passing)
 
 **Threat model anchor**: Liu et al., *Your Agent Is Mine: Measuring
 Malicious Intermediary Attacks on the LLM Supply Chain*, arXiv:2604.08407.
 Detection concepts cross-referenced with SlowMist OpenClaw Security
-Practice Guide and hvoy.ai `zzsting88/relayAPI` `claude_detector.py`.
+Practice Guide, hvoy.ai `zzsting88/relayAPI` `claude_detector.py`, and
+cctest.ai (Claude-only closed-source SaaS, 5 黑盒检测项 — 复查 2026-05-03).
 
 ---
 
@@ -453,6 +454,142 @@ Top-5 candidates ranked by maintenance-cost-per-value (worst first):
 **Cost of deferring further**: zero. Pruning helps only if we keep
 shipping new features on top; if development pauses, these stay as
 inert reference code. Revisit when next feature cycle starts.
+
+### 2.6 v1.9 — cctest.ai 复查衍生候选 (2026-05-03)
+
+**Status**: Spike-only / 研究阶段。**禁止动 master**；任何实现尝试只能落到
+draft PR，给前端同事 (post-2026-04-20 handoff) 接管时一并审视后再决定是否
+合并。无 spike 结果之前不写产品代码、不动 6D 风险矩阵、不动双分发。
+
+**Source**: cctest.ai/zh + cctest.ai/zh/faq 复查 (2026-05-03)。Memory
+`reference_cctest_ai.md` 同步更新。变更点 vs 19 天前情报：
+- 6 检查 → **5 检查**（Signature Analysis + Signature Verification
+  合并为「签名校验」单项）
+- 模型选择器新增 **Opus 4.7**
+- 价格 / 渠道分类 (aws-bedrock / vertex / kiro / warp / windsurf /
+  antigravity) 没变 —— 后四类我们 v1.7.4 已覆盖
+- 5 检查中 #1 LLM 指纹 = 我们 Step 5 (v1.6)；#2 流结构 = 我们 Step 10
+  (v1.7)；#3 非流结构 = 我们 Step 8/9 部分覆盖；只有 #4 / #5 是新增量
+
+**对 api-relay-audit 真正的增益面只有 2 项**（其余都是反向验证）：
+
+#### 2.6.1 Spike Step 14 — Protobuf 签名解析 (upstream channel ID)
+
+**What cctest.ai claims to do**: 解析 Anthropic 流式响应里的 signature
+字段 (Protobuf 编码)，反推上游渠道 → 输出
+`aws-bedrock` / `vertex` / `direct-anthropic` / `kiro` / `warp` /
+`windsurf` / `antigravity` 标签，再对签名做 replay 校验是否被篡改。
+这是他们公开宣称的"业界最专业"护城河，闭源不公开算法。
+
+**Why this is the only真新技术 worth spiking**: 我们目前只能通过响应体
+关键词 (v1.7.4) 推断渠道，无法对签名做结构化解析。如果协议可解析，可以
+新增一个 **D7 渠道维度**（与现有 D1-D6 正交），把"渠道身份"从软指标
+升级为硬指标。
+
+**Spike scope (research-only, NO product code)**:
+1. 抓取 5-10 条真实 Claude 直连响应（通过本地 `--transparent-log`
+   现有日志或新写一个一次性抓取脚本，**不**调用第三方中转），定位
+   `signature` / `signature_delta` 字段在 streaming SSE 中的出现位置
+2. 用 `protoc --decode_raw` 或 Python 的 `google.protobuf` 试解析
+   字段，确认是否真为 protobuf wire format（也可能是 base64 包裹的
+   其他二进制格式）
+3. 如果可解析：枚举字段 ID，对照 cctest.ai 输出的渠道标签反推映射表
+4. 对 Bedrock / Vertex 渠道（如果手头有可用密钥或公开样本）重复 1-3，
+   确认渠道签名在结构上确实可区分
+5. 写最小 PoC `scripts/experiments/signature_decode_spike.py`（类比
+   v1.8 时期的 `verify_signature_schema.py`，进 `experiments/` 不进
+   主 pipeline），输出可行性报告 → ROADMAP §2.6.1 状态更新
+
+**Pre-conditions to ship as Step 14**:
+- Anthropic 官方未来不破坏 wire format 的合理把握（cctest 自己也吃这个
+  风险 → 协议无文档时必然脆弱）
+- 至少能区分 `direct-anthropic` vs `aws-bedrock` vs `vertex` 三类（最低
+  可行集），其余 Kiro/Warp/Windsurf/Antigravity 标签可与 v1.7.4 关键词
+  联合判断
+- 对 OpenAI 格式中转站不应假阳（OpenAI 响应没有 signature 字段；
+  Step 14 须返回 `inconclusive` 而非 `clean`，类比 Step 10 的设计）
+
+**Blast radius**: SPIKE 阶段零（只在 `experiments/` 下）。如果 spike 通过
+推进到 Step 14：MEDIUM-HIGH，因为新增 D7 维度涉及 6D → 7D 矩阵升级 +
+双分发 char-parity + 至少 30 个新测试 + Reporter 渲染层。
+
+**Time estimate (spike only)**: 1.5-3 小时取决于 Anthropic 是否真用 protobuf。
+
+**Why deferred**: spike 必须拿到真实响应样本才能开做；handoff 期不动 master。
+
+**Risks / 已知坑**:
+- Anthropic 可能未来把 signature 改为 opaque token → 整个 Step 14 报废
+- 解析二进制协议属于灰区（reverse engineering），需在 README 注明
+  "best-effort, may break without notice"
+- 不能复用 cctest.ai 的标签字符串（闭源，无 license）—— 我方需独立命名
+
+#### 2.6.2 Spike Step 15 — 多模态能力探测 (dilution detector)
+
+**What cctest.ai does**: 在常规检测后追加 1 个图像 + 1 个文档识别请求，
+验证模型真有多模态能力。如果应答是空文本 / 拒绝识别 / 给出与图无关的
+内容 → 上游可能被替换为非多模态廉价模型。
+
+**Why worth porting**: 中转站常见的稀释手段是把 Claude Opus 替换为某个
+便宜的纯文本模型，单看文本响应可能挑不出毛病，但对图像必然露馅。我们
+现有 10+ 步全是文本探测，对这一类替换零检测能力。
+
+**Spike scope (research-only)**:
+1. 选定 1-2 张 ≤50KB 的小图，预设标准答案（如：纯色块 + 文字 OCR；
+   或 5x5 棋盘 + 计数题），版权干净（自制即可）
+2. 把图作为 base64 嵌进 Anthropic messages 格式 (`image` content
+   block) 与 OpenAI 格式 (`image_url` content part) 各发一遍，记录
+   Claude 直连基线响应特征
+3. 设计裁判：基线包含哪些关键词 → 视为 pass；空文本 / "I cannot see
+   images" / 答案与基线 token-overlap < 0.3 → 视为稀释嫌疑
+4. 评估单次成本（Anthropic 当前定价图像按 token 折算，预计 < $0.005
+   单次）—— 必须低于 Step 9-13 单步成本上限才能默认开启
+5. PoC 落 `scripts/experiments/multimodal_dilution_spike.py`
+
+**Pre-conditions to ship as Step 15**:
+- 基线裁判规则在 ≥3 个不同小图上稳定（不出现 Claude 直连本身假阴）
+- 单次成本 < $0.01，且总 token 增量 < 当前总测试 token 的 10%
+- OpenAI 格式分支处理图片输入失败时返回 `inconclusive` 而非误判
+- profile gating 决策：是默认开启，还是放进 `--profile full`
+
+**Blast radius**: SPIKE 阶段零。Step 15 实现：MEDIUM —— 需扩展
+APIClient 支持 vision content block，新增 ~150 LOC 模块 + ~25 测试 +
+双分发 inline，**但不一定升级风险矩阵**（可先做 informational
+like Step 12/13）。
+
+**Time estimate (spike only)**: 1-2 小时。
+
+**Why deferred**: 同 §2.6.1，handoff 期不动 master；且需要先决定图片
+版权来源（最稳是自制纯色 + 文字图）。
+
+**Risks / 已知坑**:
+- 真 Claude 在某些 prompt 下也会拒识别图（隐私 / 人脸 / 医学），裁判
+  规则要避开这些类别
+- 图像稀释检测对"上游是 GPT-4V 假冒 Claude"无能为力（GPT-4V 也能识图
+  正确）—— 需在 README 限定威胁模型为"上游被替换为纯文本廉价模型"
+
+#### 2.6.3 Memory & doc 同步 (已完成)
+
+- `~/.claude/projects/C--Users-john-Downloads-api-relay-audit/memory/
+  reference_cctest_ai.md` —— 6 检查 → 5、模型列表加 Opus 4.7、复查
+  日期 2026-05-03、明确两条 spike 锚点
+- 本 ROADMAP §2.6 节 (本节) —— 候选项落地
+
+#### 2.6.4 不做的事 / 显式守界
+
+| 事项 | 为什么不做 |
+|---|---|
+| 直接抄 cctest.ai 的 signature 字段映射表 | 闭源 SaaS 无 license；必须 clean-room reimplementation 从真实样本反推 |
+| 把 cctest.ai 的渠道标签字符串复用 | 同上；用方独立命名（如 `channel: bedrock-likely` 而非 `aws-bedrock`） |
+| 在 spike 阶段就升级 6D → 7D 矩阵 | 矩阵升级是 Step 14 ship 的最后一步，不是 spike 阶段决策 |
+| 引入第三方多模态裁判模型 | 破坏零依赖不变量；裁判用关键词 + token overlap 可解决 |
+| 在 §2.6 spike 通过前公开任何 cctest.ai 测试结果 | 数据外泄风险；任何对外发布需用户显式批准 |
+
+**Cost of deferring further**: 低-中。cctest.ai 是闭源 SaaS，他们改不改
+我们也跟不到；但如果中转站市场普遍意识到 protobuf 签名校验是新基线，
+我们没有这能力会显得跛脚。建议下一个 feature cycle 启动时先做
+§2.6.1 spike（拿真实样本判断可行性），通过再做 §2.6.2。
+
+---
 
 ### 3. MistTrack AML integration (profile=web3|full, optional)
 **Status**: sketched in SlowMist OpenClaw Practice Guide, not started
