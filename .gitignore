@@ -27,3 +27,8 @@ web/data.json
 
 # Local reference PDFs (not committed — large, copyright)
 *.pdf
+
+# Doc-drift metrics — JSON regenerated on every collect-metrics.py run.
+# The human-readable docs/_metrics.md IS committed; only the machine-
+# readable JSON is ignored to avoid timestamp-diff noise.
+docs/_metrics.json
