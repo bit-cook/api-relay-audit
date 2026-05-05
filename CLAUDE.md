@@ -49,7 +49,18 @@ python -m pytest tests/test_client.py -v
 
 # Run a single test case
 python -m pytest tests/test_client.py::TestAutoDetection::test_format_cached -v
+
+# Doc-drift prevention — run before publishing any external comparison/blog/X long-form
+python scripts/collect-metrics.py
 ```
+
+## Doc-drift prevention
+
+Before publishing any external comparison / blog / X long-form post that quotes step counts, test counts, version numbers, or Codex review tallies, run `python scripts/collect-metrics.py`. The script regenerates `docs/_metrics.md` (committed, GitHub-readable) and `docs/_metrics.json` (gitignored, machine-readable). Verify every numeric claim in your draft against the table.
+
+Coverage contract: ~70% of typical drift (structured metrics — version, step count, test count, CLI flag count, Codex review tallies, ROADMAP progression, dual-distribution version parity). The remaining ~30% (external competitor intel, narrative completeness, framing) is documented as the human-review boundary inside `_metrics.md` itself.
+
+Origin: 21-day drift in `docs/comparison-api-relay-audit-vs-hvoy-vs-cctest.md` caught while preparing X publication, 2026-05-05. Pareto-frontier selection — introspective generation chosen over template rendering (overkill for a single-author monthly-release project) and over manual discipline (already failed once).
 
 ## Architecture
 
