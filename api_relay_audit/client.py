@@ -174,6 +174,7 @@ def _populate_stream_signals(event: dict, signals: StreamSignals) -> None:
 # grow memory unboundedly. 1 MB is comfortably above any real
 # Anthropic event size (biggest thinking blocks are ~100 KB).
 MAX_STREAM_BUFFER_BYTES = 1024 * 1024
+CURL_STATUS_SENTINEL = "__CODEX_HTTP_STATUS__:"
 
 
 def _process_sse_line(line: str, signals: StreamSignals) -> bool:
@@ -881,6 +882,7 @@ class APIClient:
         cmd = [
             "curl", "-sk", "-N", "--no-buffer", "-X", "POST", url,
             "--max-time", str(timeout),
+            "-w", f"\n{CURL_STATUS_SENTINEL}%{{http_code}}\n",
             "--data-binary", "@-",
         ]
         for k, v in headers.items():
@@ -902,14 +904,43 @@ class APIClient:
                 pass
 
             def iter_stdout():
+                status_prefix = CURL_STATUS_SENTINEL.encode("utf-8")
                 while True:
                     line = proc.stdout.readline()
                     if not line:
                         break
+                    stripped = line.strip()
+                    if stripped.startswith(status_prefix):
+                        try:
+                            http_status[0] = int(
+                                stripped[len(status_prefix):].decode("ascii", errors="ignore")
+                            )
+                        except ValueError:
+                            pass
+                        continue
+                    if not line.lstrip().startswith(b"data: "):
+                        preview = line.decode("utf-8", errors="replace").strip()
+                        if preview and len(non_sse_preview) < 4:
+                            non_sse_preview.append(preview)
+                        continue
                     yield line
 
+            http_status = [None]
+            non_sse_preview = []
             _parse_sse_stream(iter_stdout(), signals, hasher)
             proc.wait(timeout=timeout + 10)
+            if signals.transport_error is None and http_status[0] is not None and http_status[0] >= 400:
+                preview = " ".join(non_sse_preview)[:200]
+                if preview:
+                    signals.transport_error = (
+                        f"HTTP {http_status[0]} on stream open (non-SSE body: {preview})"
+                    )
+                else:
+                    signals.transport_error = f"HTTP {http_status[0]} on stream open"
+            elif signals.transport_error is None and signals.raw_event_count == 0 and non_sse_preview:
+                signals.transport_error = (
+                    f"Non-SSE stream response: {' '.join(non_sse_preview)[:200]}"
+                )
             if proc.returncode != 0:
                 # v1.7.1 Codex fix: ANY non-zero curl exit must set
                 # transport_error so analyze_stream returns inconclusive.
@@ -918,7 +949,8 @@ class APIClient:
                 # truncated streams as clean. Already-parsed signals are
                 # preserved for debugging.
                 err = proc.stderr.read().decode("utf-8", errors="replace")[:200]
-                signals.transport_error = f"curl failed: {err}"
+                if signals.transport_error is None:
+                    signals.transport_error = f"curl failed: {err}"
         except subprocess.TimeoutExpired:
             if signals.transport_error is None:
                 signals.transport_error = "curl stream timeout"

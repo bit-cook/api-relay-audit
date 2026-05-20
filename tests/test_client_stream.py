@@ -517,6 +517,37 @@ class TestCurlNonzeroExitHandling:
         assert signals.transport_error is None
         assert signals.has_message_start is True
 
+    def test_curl_http_error_status_sets_transport_error_on_non_sse_body(self):
+        from io import BytesIO
+
+        def mock_popen_factory(*args, **kwargs):
+            proc = MagicMock()
+            proc.stdin = MagicMock()
+            proc.stdout = BytesIO(
+                b'{"error":"RateLimitReached","message":"too many requests"}\n'
+                b"__CODEX_HTTP_STATUS__:429\n"
+            )
+            proc.stderr = BytesIO(b"")
+            proc.wait = MagicMock(return_value=None)
+            proc.returncode = 0
+            return proc
+
+        with patch("api_relay_audit.client.subprocess.Popen",
+                   side_effect=mock_popen_factory):
+            client = APIClient(
+                "https://relay.example.com", "sk-test", "claude-opus-4-6",
+                verbose=False,
+            )
+            client._use_curl = True
+            signals = client.stream_call(
+                [{"role": "user", "content": "hi"}],
+            )
+
+        assert signals.raw_event_count == 0
+        assert signals.transport_error is not None
+        assert "HTTP 429" in signals.transport_error
+        assert "RateLimitReached" in signals.transport_error
+
     def test_curl_stream_reads_stdout_incrementally_via_readline(self):
         """Regression for the v1.8.2 curl fallback fix: the stream reader
         must consume stdout line-by-line, not via ``read(4096)``.

@@ -217,6 +217,7 @@ def _populate_stream_signals(event, signals):
 
 # v1.7.1 safety cap on SSE parser buffer (see api_relay_audit/client.py)
 MAX_STREAM_BUFFER_BYTES = 1024 * 1024
+CURL_STATUS_SENTINEL = "__CODEX_HTTP_STATUS__:"
 
 
 def _process_sse_line(line, signals):
@@ -765,6 +766,7 @@ class APIClient:
         cmd = [
             "curl", "-sk", "-N", "--no-buffer", "-X", "POST", url,
             "--max-time", str(timeout),
+            "-w", f"\n{CURL_STATUS_SENTINEL}%{{http_code}}\n",
             "--data-binary", "@-",
         ]
         for k, v in headers.items():
@@ -784,21 +786,51 @@ class APIClient:
                 pass
 
             def iter_stdout():
+                status_prefix = CURL_STATUS_SENTINEL.encode("utf-8")
                 while True:
                     line = proc.stdout.readline()
                     if not line:
                         break
+                    stripped = line.strip()
+                    if stripped.startswith(status_prefix):
+                        try:
+                            http_status[0] = int(
+                                stripped[len(status_prefix):].decode("ascii", errors="ignore")
+                            )
+                        except ValueError:
+                            pass
+                        continue
+                    if not line.lstrip().startswith(b"data: "):
+                        preview = line.decode("utf-8", errors="replace").strip()
+                        if preview and len(non_sse_preview) < 4:
+                            non_sse_preview.append(preview)
+                        continue
                     yield line
 
+            http_status = [None]
+            non_sse_preview = []
             _parse_sse_stream(iter_stdout(), signals)
             proc.wait(timeout=timeout + 10)
+            if signals.transport_error is None and http_status[0] is not None and http_status[0] >= 400:
+                preview = " ".join(non_sse_preview)[:200]
+                if preview:
+                    signals.transport_error = (
+                        f"HTTP {http_status[0]} on stream open (non-SSE body: {preview})"
+                    )
+                else:
+                    signals.transport_error = f"HTTP {http_status[0]} on stream open"
+            elif signals.transport_error is None and signals.raw_event_count == 0 and non_sse_preview:
+                signals.transport_error = (
+                    f"Non-SSE stream response: {' '.join(non_sse_preview)[:200]}"
+                )
             if proc.returncode != 0:
                 # v1.7.1 Codex fix: any non-zero curl exit sets
                 # transport_error (was previously guarded by
                 # `and raw_event_count == 0`, which silently swallowed
                 # mid-stream failures on truncated streams).
                 err = proc.stderr.read().decode("utf-8", errors="replace")[:200]
-                signals.transport_error = f"curl failed: {err}"
+                if signals.transport_error is None:
+                    signals.transport_error = f"curl failed: {err}"
         except subprocess.TimeoutExpired:
             if signals.transport_error is None:
                 signals.transport_error = "curl stream timeout"
@@ -2329,6 +2361,11 @@ REFUSAL_MARKERS = (
     "can't reveal",
     "can't provide",
     "cannot",
+    "don't have",
+    "do not have",
+    "there is no",
+    "there isn't",
+    "there isnt",
     "won't",
     "will not",
     "refuse",
@@ -2378,6 +2415,41 @@ CLAUDE_SELF_ID_MARKERS = (
 )
 
 
+# Benign generic default persona lines some Claude-family models emit when
+# no upstream system prompt exists. These should not be treated as leaked
+# prompt templates even though they superficially match "You are a X assistant".
+GENERIC_NONLEAK_PERSONA_PATTERNS = (
+    re.compile(r"^\s*you are an? helpful assistant[.!]?\s*$", re.I),
+    re.compile(r"^\s*you are an?\s+(?:ai\s+)?assistant[.!]?\s*$", re.I),
+)
+
+RETRACTION_MARKERS = (
+    "i fabricated",
+    "i've fabricated",
+    "i generated a",
+    "i made that up",
+    "i made this up",
+    "i shouldn't have",
+    "that was fabricated",
+    "that was made up",
+    "plausible-sounding but fabricated",
+    "actually, i should be straightforward",
+    "i apologize for that",
+)
+
+
+def _strip_markdown_code_fence(text: str) -> str:
+    """Unwrap a response that is only a Markdown code span/block."""
+    stripped = text.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+            return "\n".join(lines[1:-1]).strip()
+    if stripped.startswith("`") and stripped.endswith("`") and len(stripped) >= 2:
+        return stripped[1:-1].strip()
+    return stripped
+
+
 def _looks_like_refusal(text_lower: str) -> bool:
     """True if ``text_lower`` contains a refusal phrase."""
     return any(m in text_lower for m in REFUSAL_MARKERS)
@@ -2388,8 +2460,16 @@ def _contains_claude_self_id(text_lower: str) -> bool:
     return any(m in text_lower for m in CLAUDE_SELF_ID_MARKERS)
 
 
+def _contains_retraction(text_lower: str) -> bool:
+    """True when a response explicitly disowns or retracts earlier text."""
+    return any(m in text_lower for m in RETRACTION_MARKERS)
+
+
 def _matches_structural_leak(text: str) -> bool:
     """True if ``text`` matches any structural prompt-template pattern."""
+    normalized = _strip_markdown_code_fence(text)
+    if any(p.search(normalized) for p in GENERIC_NONLEAK_PERSONA_PATTERNS):
+        return False
     return any(p.search(text) for p in STRUCTURAL_LEAK_PATTERNS)
 
 
@@ -2397,6 +2477,16 @@ def _is_benign_claude_refusal(text_lower: str) -> bool:
     """Exemption gate: True only when both refusal AND Claude self-ID
     are present. See scripts/audit.py for the Pareto-optimal rationale."""
     return _looks_like_refusal(text_lower) and _contains_claude_self_id(text_lower)
+
+
+def _is_self_corrected_hidden_prompt_echo(test_name, text_lower, structural, strong_hits):
+    """True for Test C echoing its own requested JSON key, then retracting it."""
+    return (
+        test_name == "C - JSON continuation"
+        and not structural
+        and strong_hits == ["hidden_prompt"]
+        and _contains_retraction(text_lower)
+    )
 
 
 def test_prompt_extraction(client, report):
@@ -2438,15 +2528,22 @@ def test_prompt_extraction(client, report):
             strong_string_markers = ["hidden_prompt", "kiro"]
             weak_markers = ["system prompt", "assistant", "coding", "developer"]
 
-            has_strong = (
-                _matches_structural_leak(text)
-                or any(kw in text_lower for kw in strong_string_markers)
-            )
+            structural = _matches_structural_leak(text)
+            strong_hits = [kw for kw in strong_string_markers if kw in text_lower]
+            has_strong = structural or bool(strong_hits)
             weak_hits = [kw for kw in weak_markers if kw in text_lower]
 
             if has_strong:
                 leaked = True
-                report.flag("red", f"Test {name}: Hidden prompt content extracted!")
+                if _is_self_corrected_hidden_prompt_echo(name, text_lower, structural, strong_hits):
+                    report.flag(
+                        "yellow",
+                        f"Test {name}: `hidden_prompt` marker echoed, but response "
+                        "explicitly retracts or disowns it — possible model "
+                        "self-correction, verify manually",
+                    )
+                else:
+                    report.flag("red", f"Test {name}: Hidden prompt content extracted!")
             elif weak_hits:
                 if _is_benign_claude_refusal(text_lower):
                     pass  # Exempt: refusal + Claude self-ID
