@@ -108,3 +108,7 @@ python audit.py --key <YOUR_KEY> --url <BASE_URL> --profile web3 --output report
 ## License
 
 MIT
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=toby-bridges/api-relay-audit&type=Date)](https://www.star-history.com/#toby-bridges/api-relay-audit&Date)
