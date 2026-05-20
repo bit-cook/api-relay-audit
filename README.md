@@ -21,6 +21,8 @@
   <a href="./FOR_JOHN.md"><strong>Engineering Diary</strong></a>
   ·
   <a href="./SKILL.md"><strong>OpenClaw Skill</strong></a>
+  ·
+  <a href="./skills/api-relay-audit/SKILL.md"><strong>Hermes Skill</strong></a>
 </p>
 
 ---

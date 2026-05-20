@@ -1,13 +1,13 @@
 ---
 name: api-relay-audit
-description: "Audit third-party AI API relay/proxy services for security risks. Detects hidden prompt injection, prompt leakage, instruction override, identity hijacking (Chinese-market substitutes), jailbreak vulnerabilities, context truncation, tool-call package substitution (AC-1.a), error response header leakage (AC-2 adjacent), SSE-level stream integrity anomalies (AC-1 streaming), and Web3 prompt injection (SlowMist signature isolation). Use when: test relay, audit API, audit relay, detect injection, relay security, API relay audit, is this relay safe, does it inject prompts, test proxy API, check API key, 中转站安全, 测试中转站, 中转站审计."
+description: "Audit third-party AI API relay/proxy services for security risks. Detects hidden prompt injection, prompt leakage, instruction override, identity hijacking (Chinese-market substitutes), jailbreak vulnerabilities, context truncation, tool-call package substitution (AC-1.a), error response header leakage (AC-2 adjacent), SSE-level stream integrity anomalies (AC-1 streaming), Web3 prompt injection (SlowMist signature isolation), infrastructure fingerprinting, and latency variance anomalies. Use when: test relay, audit API, audit relay, detect injection, relay security, API relay audit, is this relay safe, does it inject prompts, test proxy API, check API key, 中转站安全, 测试中转站, 中转站审计."
 version: 2.3.0
 metadata: {"openclaw":{"requires":{"anyBins":["curl","python3","python"],"env":[]},"emoji":"🛡️","homepage":"https://github.com/toby-bridges/api-relay-audit"}}
 ---
 
 # API Relay Security Audit (API 中转站安全审计)
 
-A self-contained 11-step security audit for third-party AI API relay/proxy services (中转站). One script, zero config, full report. Threat taxonomy follows Liu et al., *Your Agent Is Mine*, arXiv:2604.08407.
+A self-contained 13-step security audit for third-party AI API relay/proxy services (中转站). One script, zero config, full report. Threat taxonomy follows Liu et al., *Your Agent Is Mine*, arXiv:2604.08407. Infrastructure fingerprinting and latency variance are sourced from Zhang et al., *Real Money, Fake Models*, arXiv:2603.01919.
 
 ## Quick Start (快速开始)
 
@@ -23,7 +23,7 @@ The script has zero dependencies beyond Python 3 + `curl`. All HTTP calls go thr
 
 ## What This Skill Does (功能概述)
 
-Runs an 11-step automated audit against any OpenAI-compatible or Anthropic-compatible API relay:
+Runs a 13-step automated audit against any OpenAI-compatible or Anthropic-compatible API relay:
 
 | Step | Test | What It Detects |
 |------|------|-----------------|
@@ -38,6 +38,8 @@ Runs an 11-step automated audit against any OpenAI-compatible or Anthropic-compa
 | 9 | Error response leakage (错误响应泄漏, AC-2 adjacent) | 7-8 deterministic broken requests (malformed JSON, invalid model, wrong content-type, missing fields, unknown endpoint, force_upstream_error, auth_probe, optional 256 KB oversized body); scans the error body and response headers for echoed credentials, upstream URLs, env var names, filesystem paths, stack traces, LiteLLM internal field leaks, and Bedrock guardrail PII echoes |
 | 10 | Stream integrity (流完整性, AC-1 SSE-level) | Opens an Anthropic streaming request with thinking enabled, captures every SSE event, and verifies 4 invariants: all event types are in the known set (ping/message_start/content_block_start/content_block_delta/content_block_stop/message_delta/message_stop); `output_tokens` is monotonically non-decreasing; `input_tokens` is consistent across message_start and message_delta; `signature_delta` events have non-empty signatures. Also checks `message_start.message.model` contains `claude`. Concept sourced from hvoy.ai `claude_detector.py`. |
 | 11 | Web3 prompt injection (Web3 注入, `--profile web3` only) | 3 SlowMist signature-isolation probes targeting wallet safety: ETH transfer guidance, sign-transaction refusal, private-key leak refusal. Safe-priority classifier with hard-injection override for contradictory responses. |
+| 12 | Infrastructure fingerprint (基础设施指纹) | Unauthenticated `GET /`, `/v1/models`, and nonexistent-endpoint probes classify known relay frameworks such as One API / New API, LobeChat, FastGPT, Cloudflare, nginx, and Caddy. Informational only. |
+| 13 | Latency variance (延迟方差指纹) | Repeated identical low-token requests measure latency distribution and flag variable or bimodal routing patterns that may suggest queue multiplexing or silent model/provider substitution. Informational only. |
 
 Output: a structured Markdown report with risk ratings per section and an overall verdict.
 
