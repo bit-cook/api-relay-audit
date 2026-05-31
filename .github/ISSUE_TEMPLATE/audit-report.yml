@@ -1,5 +1,5 @@
-name: Submit Audit Report / 提交审计报告
-description: Submit a community audit result for a relay / 提交中转站社区审计结果
+name: Submit Audit Evidence / 提交审计证据
+description: Submit community audit evidence for a relay / 提交中转站社区审计证据
 title: "[Audit] "
 labels: ["audit-submission"]
 body:
@@ -32,6 +32,24 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: tool_commit
+    attributes:
+      label: Tool Commit / 工具提交
+      description: "The api-relay-audit git commit used for this run (7-40 hex chars)."
+      placeholder: "040676c"
+    validations:
+      required: true
+
+  - type: input
+    id: tested_at
+    attributes:
+      label: Tested At / 审计时间
+      description: "ISO date or datetime when the audit was run, e.g. 2026-06-01 or 2026-06-01T12:00:00Z."
+      placeholder: "2026-06-01T12:00:00Z"
+    validations:
+      required: true
+
   - type: dropdown
     id: overall_rating
     attributes:
@@ -56,12 +74,34 @@ body:
       required: true
 
   - type: textarea
+    id: report_artifact
+    attributes:
+      label: Report Artifact / 报告文件
+      description: |
+        Upload or link the redacted Markdown report artifact that the hash below was calculated from.
+        The screenshot is only a human-readable preview; this report artifact is the reviewable evidence.
+        上传或粘贴已脱敏 Markdown 报告文件链接。下面的哈希应从这个报告文件计算得出。
+        截图只作为人工预览；该报告文件才是可复核证据。
+      placeholder: "Upload report-redacted.md here, or paste an https://... link"
+    validations:
+      required: true
+
+  - type: input
+    id: report_hash
+    attributes:
+      label: Report Hash / 报告哈希
+      description: "SHA-256 of the redacted report artifact, optionally prefixed with sha256:."
+      placeholder: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    validations:
+      required: true
+
+  - type: textarea
     id: red_flags
     attributes:
       label: Key Findings / 主要发现
       description: |
-        List the main red/yellow flags from the Risk Summary section.
-        列出风险摘要中的主要红/黄标记。
+        List observed red/yellow evidence signals from the Risk Summary section.
+        列出风险摘要中的红/黄证据信号。
       placeholder: |
         - 🔴 Token injection: +3200 tokens
         - 🟡 Prompt extraction: 2/6 methods succeeded

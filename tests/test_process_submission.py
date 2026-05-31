@@ -1,21 +1,25 @@
-"""Unit tests for scripts/process_submission.py"""
+"""Unit tests for scripts/process_submission.py."""
 
+import json
 import sys
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from process_submission import (
+from process_submission import (  # noqa: E402
+    build_evidence_record,
+    check_account_age,
+    check_rate_limit,
+    extract_artifact_url,
+    extract_image_urls,
+    normalize_report_hash,
     parse_issue_body,
     validate_fields,
-    build_relay_entry,
-    check_account_age,
-    extract_image_urls,
-    check_rate_limit,
 )
 
-SAMPLE_BODY = """### Relay Domain / 中转站域名
+
+REPORT_HASH = "a" * 64
+SAMPLE_BODY = f"""### Relay Domain / 中转站域名
 
 api.example.com
 
@@ -27,6 +31,14 @@ full
 
 v2.3
 
+### Tool Commit / 工具提交
+
+040676c
+
+### Tested At / 审计时间
+
+2026-06-01T12:00:00Z
+
 ### Overall Rating / 总体评级
 
 HIGH
@@ -34,6 +46,14 @@ HIGH
 ### Report Screenshot / 报告截图
 
 ![report](https://user-images.githubusercontent.com/123/report.png)
+
+### Report Artifact / 报告文件
+
+[report-redacted.md](https://github.com/user-attachments/files/123/report-redacted.md)
+
+### Report Hash / 报告哈希
+
+sha256:{REPORT_HASH}
 
 ### Key Findings / 主要发现
 
@@ -51,30 +71,53 @@ def test_parse_issue_body():
     assert fields["relay_domain"] == "api.example.com"
     assert fields["profile"] == "full"
     assert fields["tool_version"] == "v2.3"
+    assert fields["tool_commit"] == "040676c"
+    assert fields["tested_at"] == "2026-06-01T12:00:00Z"
     assert fields["overall_rating"] == "HIGH"
+    assert fields["report_hash"] == f"sha256:{REPORT_HASH}"
     assert "report.png" in fields["report_image"]
+    assert "report-redacted.md" in fields["report_artifact"]
 
 
 def test_validate_fields_valid():
     fields = parse_issue_body(SAMPLE_BODY)
-    errors = validate_fields(fields)
-    assert errors == []
+    assert validate_fields(fields) == []
 
 
 def test_validate_fields_rejects_bad():
-    bad = {"relay_domain": "", "profile": "xxx", "overall_rating": "MAYBE"}
+    bad = {
+        "relay_domain": "",
+        "profile": "xxx",
+        "overall_rating": "MAYBE",
+        "tool_commit": "not-a-commit",
+        "tested_at": "yesterday",
+        "report_hash": "nope",
+    }
     errors = validate_fields(bad)
     assert len(errors) > 0
 
 
-def test_build_relay_entry():
+def test_build_evidence_record():
     fields = parse_issue_body(SAMPLE_BODY)
-    entry = build_relay_entry(fields, "testuser", "42")
-    assert entry["domain"] == "api.example.com"
-    assert entry["rating"] == "red"
-    assert entry["source"] == "community"
+    entry = build_evidence_record(fields, "testuser", "42")
+    assert entry["recordType"] == "community-submitted-audit-evidence"
+    assert entry["relayDomain"] == "api.example.com"
+    assert entry["toolCommit"] == "040676c"
+    assert entry["auditProfile"] == "full"
+    assert entry["toolReportedOverallRating"] == "HIGH"
+    assert entry["reportHash"] == f"sha256:{REPORT_HASH}"
+    assert (
+        entry["reportArtifactUrl"]
+        == "https://github.com/user-attachments/files/123/report-redacted.md"
+    )
+    assert entry["evidenceStatus"] == "accepted_unverified"
+    assert entry["reviewStatus"] == "unverified"
+    assert entry["disputeStatus"] == "none"
+    assert entry["staleAfter"] == "2026-08-30"
+    assert entry["source"] == "github-issue"
     assert len(entry["redFlags"]) == 2
     assert len(entry["reportImages"]) == 1
+    assert entry["reportImages"][0] != entry["reportArtifactUrl"]
 
 
 def test_check_account_age():
@@ -90,9 +133,21 @@ def test_extract_image_urls():
     assert len(extract_image_urls("![a](https://a.com/1.png) ![b](https://b.com/2.jpg)")) == 2
 
 
+def test_extract_artifact_url():
+    assert (
+        extract_artifact_url("[report.md](https://github.com/user-attachments/files/1/report.md)")
+        == "https://github.com/user-attachments/files/1/report.md"
+    )
+    assert extract_artifact_url("https://example.com/report-redacted.md") == (
+        "https://example.com/report-redacted.md"
+    )
+    assert extract_artifact_url("http://example.com/report.md") == ""
+    assert extract_artifact_url("no link") == ""
+
+
 def test_check_rate_limit():
     now_iso = datetime.now(timezone.utc).isoformat()
-    fake_data = [{"domain": "test.com", "submittedAt": now_iso} for _ in range(10)]
+    fake_data = [{"relayDomain": "test.com", "submittedAt": now_iso} for _ in range(10)]
     assert check_rate_limit("test.com", fake_data) is True
     assert check_rate_limit("other.com", fake_data) is False
     assert check_rate_limit("test.com", []) is False
@@ -101,12 +156,8 @@ def test_check_rate_limit():
 def test_empty_body_rejected():
     fields = parse_issue_body("")
     errors = validate_fields(fields)
-    assert len(errors) >= 4
+    assert len(errors) >= 9
 
-
-# ---------------------------------------------------------------------------
-# Edge-case tests (appended)
-# ---------------------------------------------------------------------------
 
 def _make_body(**overrides):
     """Build a valid issue body, then override specific field values."""
@@ -114,8 +165,14 @@ def _make_body(**overrides):
         "relay_domain": "api.example.com",
         "profile": "full",
         "tool_version": "v2.3",
+        "tool_commit": "040676c",
+        "tested_at": "2026-06-01T12:00:00Z",
         "overall_rating": "HIGH",
         "report_image": "![report](https://user-images.githubusercontent.com/123/report.png)",
+        "report_artifact": (
+            "[report-redacted.md](https://github.com/user-attachments/files/123/report-redacted.md)"
+        ),
+        "report_hash": f"sha256:{REPORT_HASH}",
         "red_flags": "- \U0001f534 Token injection: +3200 tokens",
         "notes": "Test submission",
     }
@@ -124,8 +181,12 @@ def _make_body(**overrides):
         f"### Relay Domain / 中转站域名\n\n{defaults['relay_domain']}\n\n"
         f"### Audit Profile / 审计配置\n\n{defaults['profile']}\n\n"
         f"### Tool Version / 工具版本\n\n{defaults['tool_version']}\n\n"
+        f"### Tool Commit / 工具提交\n\n{defaults['tool_commit']}\n\n"
+        f"### Tested At / 审计时间\n\n{defaults['tested_at']}\n\n"
         f"### Overall Rating / 总体评级\n\n{defaults['overall_rating']}\n\n"
         f"### Report Screenshot / 报告截图\n\n{defaults['report_image']}\n\n"
+        f"### Report Artifact / 报告文件\n\n{defaults['report_artifact']}\n\n"
+        f"### Report Hash / 报告哈希\n\n{defaults['report_hash']}\n\n"
         f"### Key Findings / 主要发现\n\n{defaults['red_flags']}\n\n"
         f"### Additional Notes / 补充说明\n\n{defaults['notes']}\n"
     )
@@ -134,21 +195,19 @@ def _make_body(**overrides):
 def test_domain_with_path_traversal():
     """relay_domain containing '../' or '/' should be rejected by validation."""
     for bad_domain in ["../etc/passwd", "foo/bar", "a\\b"]:
-        body = _make_body(relay_domain=bad_domain)
-        fields = parse_issue_body(body)
+        fields = parse_issue_body(_make_body(relay_domain=bad_domain))
         errors = validate_fields(fields)
         domain_errors = [e for e in errors if "relay_domain" in e and "hostname" in e]
-        assert len(domain_errors) > 0, f"Expected hostname error for domain {bad_domain!r}"
+        assert domain_errors, f"Expected hostname error for domain {bad_domain!r}"
 
 
 def test_domain_with_special_chars():
     """relay_domain with spaces, unicode, angle brackets should be rejected."""
     for bad_domain in ["has space.com", "domäin.ü.com", "<script>alert(1)</script>"]:
-        body = _make_body(relay_domain=bad_domain)
-        fields = parse_issue_body(body)
+        fields = parse_issue_body(_make_body(relay_domain=bad_domain))
         errors = validate_fields(fields)
         domain_errors = [e for e in errors if "relay_domain" in e and "hostname" in e]
-        assert len(domain_errors) > 0, f"Expected hostname error for domain {bad_domain!r}"
+        assert domain_errors, f"Expected hostname error for domain {bad_domain!r}"
 
 
 def test_domain_must_be_canonical_hostname():
@@ -162,35 +221,29 @@ def test_domain_must_be_canonical_hostname():
         "api..example.com",
     ]
     for bad_domain in bad_domains:
-        body = _make_body(relay_domain=bad_domain)
-        fields = parse_issue_body(body)
+        fields = parse_issue_body(_make_body(relay_domain=bad_domain))
         errors = validate_fields(fields)
         domain_errors = [e for e in errors if "relay_domain" in e and "hostname" in e]
-        assert len(domain_errors) > 0, f"Expected hostname error for domain {bad_domain!r}"
+        assert domain_errors, f"Expected hostname error for domain {bad_domain!r}"
 
 
 def test_domain_allows_case_and_trailing_dot():
     """Case and trailing dot are canonicalized before hostname validation."""
-    body = _make_body(relay_domain="API.Example.COM.")
-    fields = parse_issue_body(body)
+    fields = parse_issue_body(_make_body(relay_domain="API.Example.COM."))
     errors = validate_fields(fields)
-    domain_errors = [e for e in errors if "relay_domain" in e]
-    assert domain_errors == []
-    entry = build_relay_entry(fields, "tester", "100")
-    assert entry["domain"] == "api.example.com"
+    assert [e for e in errors if "relay_domain" in e] == []
+    entry = build_evidence_record(fields, "tester", "100")
+    assert entry["relayDomain"] == "api.example.com"
 
 
 def test_massive_body():
     """A very large issue body (>100 KB) should not crash parse_issue_body."""
-    huge_notes = "x" * 120_000
-    body = _make_body(notes=huge_notes)
+    body = _make_body(notes="x" * 120_000)
     assert len(body.encode("utf-8")) > 100_000
     fields = parse_issue_body(body)
-    # Should still parse the structured fields correctly
     assert fields["relay_domain"] == "api.example.com"
     assert fields["overall_rating"] == "HIGH"
-    errors = validate_fields(fields)
-    assert errors == []
+    assert validate_fields(fields) == []
 
 
 def test_multiple_images():
@@ -201,9 +254,8 @@ def test_multiple_images():
         "![c](https://img.com/3.png) "
         "![d](https://img.com/4.jpg)"
     )
-    body = _make_body(report_image=multi_img)
-    fields = parse_issue_body(body)
-    entry = build_relay_entry(fields, "tester", "99")
+    fields = parse_issue_body(_make_body(report_image=multi_img))
+    entry = build_evidence_record(fields, "tester", "99")
     assert len(entry["reportImages"]) == 4
     assert "https://img.com/3.png" in entry["reportImages"]
 
@@ -218,8 +270,7 @@ def test_report_images_must_be_https_without_markdown_title():
         "![x](http://img.com/a.png)",
         "![x](https://img.com/a.png title)",
     ]:
-        body = _make_body(report_image=bad_image)
-        fields = parse_issue_body(body)
+        fields = parse_issue_body(_make_body(report_image=bad_image))
         errors = validate_fields(fields)
         image_errors = [e for e in errors if "report_image" in e]
         assert image_errors, f"Expected report_image error for {bad_image!r}"
@@ -231,61 +282,114 @@ def test_missing_report_image():
         "relay_domain": "api.example.com",
         "profile": "full",
         "tool_version": "v2.3",
+        "tool_commit": "040676c",
+        "tested_at": "2026-06-01",
         "overall_rating": "HIGH",
-        # report_image intentionally omitted
+        "report_hash": f"sha256:{REPORT_HASH}",
+        "report_artifact": "https://example.com/report-redacted.md",
     }
     errors = validate_fields(fields)
     image_errors = [e for e in errors if "report_image" in e]
-    assert len(image_errors) > 0
+    assert image_errors
+
+
+def test_missing_report_artifact():
+    """Missing report_artifact should produce a validation error."""
+    fields = {
+        "relay_domain": "api.example.com",
+        "profile": "full",
+        "tool_version": "v2.3",
+        "tool_commit": "040676c",
+        "tested_at": "2026-06-01",
+        "overall_rating": "HIGH",
+        "report_hash": f"sha256:{REPORT_HASH}",
+        "report_image": "![report](https://user-images.githubusercontent.com/123/report.png)",
+    }
+    errors = validate_fields(fields)
+    artifact_errors = [e for e in errors if "report_artifact" in e]
+    assert artifact_errors
+
+
+def test_report_artifact_must_be_https():
+    """The report artifact is the hashable evidence object and must be HTTPS."""
+    for bad_artifact in ["report-redacted.md", "http://example.com/report.md"]:
+        fields = parse_issue_body(_make_body(report_artifact=bad_artifact))
+        errors = validate_fields(fields)
+        artifact_errors = [e for e in errors if "report_artifact" in e]
+        assert artifact_errors, f"Expected report_artifact error for {bad_artifact!r}"
+
+
+def test_report_artifact_written_separately_from_screenshot():
+    fields = parse_issue_body(
+        _make_body(
+            report_image="![report](https://example.com/report.png)",
+            report_artifact="https://example.com/report-redacted.md",
+        )
+    )
+    entry = build_evidence_record(fields, "tester", "101")
+    assert entry["reportImages"] == ["https://example.com/report.png"]
+    assert entry["reportArtifactUrl"] == "https://example.com/report-redacted.md"
+    assert entry["reportImages"][0] != entry["reportArtifactUrl"]
 
 
 def test_version_formats():
     """Valid version strings should pass; invalid ones should fail."""
     valid_versions = ["v2.3", "2.3", "v10.0.1"]
     for ver in valid_versions:
-        body = _make_body(tool_version=ver)
-        fields = parse_issue_body(body)
+        fields = parse_issue_body(_make_body(tool_version=ver))
         errors = validate_fields(fields)
-        ver_errors = [e for e in errors if "tool_version" in e]
-        assert ver_errors == [], f"Version {ver!r} should be valid but got: {ver_errors}"
+        assert [e for e in errors if "tool_version" in e] == []
 
     invalid_versions = ["abc"]
     for ver in invalid_versions:
-        body = _make_body(tool_version=ver)
-        fields = parse_issue_body(body)
+        fields = parse_issue_body(_make_body(tool_version=ver))
         errors = validate_fields(fields)
-        ver_errors = [e for e in errors if "tool_version" in e]
-        assert len(ver_errors) > 0, f"Version {ver!r} should be invalid"
-
-    # Empty version triggers "Missing required field" instead of format error
-    fields_empty = {
-        "relay_domain": "api.example.com",
-        "profile": "full",
-        "tool_version": "",
-        "overall_rating": "HIGH",
-        "report_image": "![r](https://img.com/r.png)",
-    }
-    errors = validate_fields(fields_empty)
-    missing_errors = [e for e in errors if "Missing" in e and "tool_version" in e]
-    assert len(missing_errors) > 0, "Empty version should trigger missing-field error"
+        assert [e for e in errors if "tool_version" in e]
 
 
-def test_build_entry_low_rating():
-    """LOW overall rating should map to green."""
-    body = _make_body(overall_rating="LOW")
-    fields = parse_issue_body(body)
-    entry = build_relay_entry(fields, "user1", "10")
-    assert entry["rating"] == "green"
-    assert "Low Risk" in entry["ratingLabel"]
+def test_tool_commit_required_and_validated():
+    fields = parse_issue_body(_make_body(tool_commit="040676c"))
+    assert [e for e in validate_fields(fields) if "tool_commit" in e] == []
+
+    fields = parse_issue_body(_make_body(tool_commit="not-a-commit"))
+    assert [e for e in validate_fields(fields) if "tool_commit" in e]
 
 
-def test_build_entry_medium_rating():
-    """MEDIUM overall rating should map to yellow."""
-    body = _make_body(overall_rating="MEDIUM")
-    fields = parse_issue_body(body)
-    entry = build_relay_entry(fields, "user2", "20")
-    assert entry["rating"] == "yellow"
-    assert "Medium Risk" in entry["ratingLabel"]
+def test_report_hash_required_and_normalized():
+    assert normalize_report_hash(REPORT_HASH) == f"sha256:{REPORT_HASH}"
+    assert normalize_report_hash(f"sha256:{REPORT_HASH.upper()}") == f"sha256:{REPORT_HASH}"
+
+    fields = parse_issue_body(_make_body(report_hash=REPORT_HASH))
+    assert [e for e in validate_fields(fields) if "report_hash" in e] == []
+    entry = build_evidence_record(fields, "tester", "12")
+    assert entry["reportHash"] == f"sha256:{REPORT_HASH}"
+
+    fields = parse_issue_body(_make_body(report_hash="abc"))
+    assert [e for e in validate_fields(fields) if "report_hash" in e]
+
+
+def test_tested_at_date_or_datetime():
+    for value in ["2026-06-01", "2026-06-01T12:00:00Z"]:
+        fields = parse_issue_body(_make_body(tested_at=value))
+        assert [e for e in validate_fields(fields) if "tested_at" in e] == []
+
+    fields = parse_issue_body(_make_body(tested_at="last week"))
+    assert [e for e in validate_fields(fields) if "tested_at" in e]
+
+
+def test_build_entry_low_rating_preserves_tool_reported_rating():
+    """LOW is a tool-reported result, not a platform safety endorsement."""
+    fields = parse_issue_body(_make_body(overall_rating="LOW"))
+    entry = build_evidence_record(fields, "user1", "10")
+    assert entry["toolReportedOverallRating"] == "LOW"
+    assert "rating" not in entry
+    assert "ratingLabel" not in entry
+
+
+def test_build_entry_medium_rating_preserves_tool_reported_rating():
+    fields = parse_issue_body(_make_body(overall_rating="MEDIUM"))
+    entry = build_evidence_record(fields, "user2", "20")
+    assert entry["toolReportedOverallRating"] == "MEDIUM"
 
 
 def test_rate_limit_old_entries():
@@ -296,52 +400,50 @@ def test_rate_limit_old_entries():
     old_time = (now - timedelta(hours=25)).isoformat()
     recent_time = now.isoformat()
 
-    # 10 old entries (>24h) — should NOT trigger rate limit
-    old_data = [{"domain": "test.com", "submittedAt": old_time} for _ in range(15)]
-    assert check_rate_limit("test.com", old_data) is False, (
-        "Old entries (>24h) should not count toward rate limit"
-    )
+    old_data = [{"relayDomain": "test.com", "submittedAt": old_time} for _ in range(15)]
+    assert check_rate_limit("test.com", old_data) is False
 
-    # Mix: 9 recent + 15 old — should NOT trigger (only 9 within window)
     mixed_data = old_data + [
-        {"domain": "test.com", "submittedAt": recent_time} for _ in range(9)
+        {"relayDomain": "test.com", "submittedAt": recent_time} for _ in range(9)
     ]
     assert check_rate_limit("test.com", mixed_data) is False
 
-    # Mix: 10 recent + 15 old — SHOULD trigger (10 within window)
     mixed_data_trigger = old_data + [
-        {"domain": "test.com", "submittedAt": recent_time} for _ in range(10)
+        {"relayDomain": "test.com", "submittedAt": recent_time} for _ in range(10)
     ]
     assert check_rate_limit("test.com", mixed_data_trigger) is True
 
 
 def test_rate_limit_normalizes_existing_domains():
-    """Legacy/manual relays.json domains should be normalized before comparison."""
+    """Legacy/manual evidence domains should be normalized before comparison."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    fake_data = [{"relayDomain": "TEST.com.", "submittedAt": now_iso} for _ in range(10)]
+    assert check_rate_limit("test.com", fake_data) is True
+
+
+def test_rate_limit_accepts_legacy_domain_key():
     now_iso = datetime.now(timezone.utc).isoformat()
     fake_data = [{"domain": "TEST.com.", "submittedAt": now_iso} for _ in range(10)]
     assert check_rate_limit("test.com", fake_data) is True
 
 
-def test_concurrent_json_write_safety(tmp_path, monkeypatch):
-    """If relays.json does not exist yet, the script should create it."""
-    import json as _json
-
-    fake_relays = tmp_path / "web" / "data" / "relays.json"
-    assert not fake_relays.exists()
-
-    # Monkeypatch the module-level constant so main() writes to tmp_path
+def test_main_creates_evidence_json(tmp_path, monkeypatch):
+    """If evidence.json does not exist yet, the script should create it."""
     import process_submission as mod
-    monkeypatch.setattr(mod, "RELAYS_JSON", fake_relays)
 
-    body = _make_body()
-    monkeypatch.setenv("ISSUE_BODY", body)
+    fake_evidence = tmp_path / "web" / "data" / "evidence.json"
+    assert not fake_evidence.exists()
+    monkeypatch.setattr(mod, "EVIDENCE_JSON", fake_evidence)
+
+    monkeypatch.setenv("ISSUE_BODY", _make_body())
     monkeypatch.setenv("ISSUE_AUTHOR", "testbot")
     monkeypatch.setenv("ISSUE_NUMBER", "1")
     monkeypatch.setenv("AUTHOR_CREATED_AT", "2020-01-01T00:00:00Z")
 
     mod.main()
 
-    assert fake_relays.exists(), "relays.json should have been created"
-    data = _json.loads(fake_relays.read_text(encoding="utf-8"))
+    assert fake_evidence.exists(), "evidence.json should have been created"
+    data = json.loads(fake_evidence.read_text(encoding="utf-8"))
     assert len(data) == 1
-    assert data[0]["domain"] == "api.example.com"
+    assert data[0]["relayDomain"] == "api.example.com"
+    assert data[0]["evidenceStatus"] == "accepted_unverified"

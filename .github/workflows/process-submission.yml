@@ -1,4 +1,4 @@
-name: Process Audit Submission
+name: Process Audit Evidence Submission
 
 on:
   issues:
@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 concurrency:
   group: process-submission
@@ -28,6 +29,34 @@ jobs:
 
       - name: Sync latest master
         run: git pull --ff-only origin master
+
+      - name: Ensure workflow labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: 'shape-valid', color: '0E8A16', description: 'Submission shape is valid; publication still requires review.' },
+              { name: 'needs-review', color: 'FBCA04', description: 'Submission needs manual review before evidence PR generation.' },
+              { name: 'rate-limited', color: 'D93F0B', description: 'Submission hit the per-relay rate limit.' },
+              { name: 'validation-errors', color: 'B60205', description: 'Submission failed required shape validation.' },
+              { name: 'evidence-pr-created', color: '1D76DB', description: 'A draft evidence publication PR was created.' }
+            ];
+            for (const label of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ...label
+                });
+              }
+            }
 
       - name: Get author account age
         id: author
@@ -53,6 +82,18 @@ jobs:
         if: steps.process.outputs.status == 'ERROR' || steps.process.outputs.status == ''
         run: exit 1
 
+      - name: Label shape-valid
+        if: steps.process.outputs.status == 'SHAPE_VALID'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['shape-valid']
+            });
+
       - name: Label needs-review
         if: steps.process.outputs.status == 'NEEDS_REVIEW'
         uses: actions/github-script@v7
@@ -68,7 +109,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '⚠️ Auto-check: GitHub account is less than 30 days old. This submission requires manual review.\n\n⚠️ 自动检查：GitHub 账号注册不满 30 天，需人工审核。'
+              body: '⚠️ Auto-check: this submission needs manual review before any evidence publication PR is generated.\n\n⚠️ 自动检查：该提交需要人工复核，暂不会生成公开证据 PR。'
             });
 
       - name: Label rate-limited
@@ -94,37 +135,91 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['validation-errors']
+            });
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '❌ Submission has validation errors. Please check the required fields and resubmit.\n\n❌ 提交存在验证错误，请检查必填字段后重新提交。'
+              body: '❌ Submission has validation errors. Please check the required fields and resubmit.\n\n❌ 提交存在格式校验错误，请检查必填字段后重新提交。'
             });
 
-      - name: Commit and push
-        if: steps.process.outputs.status == 'OK'
+      - name: Open evidence review PR
+        id: evidence_pr
+        if: steps.process.outputs.status == 'SHAPE_VALID'
         env:
+          GH_TOKEN: ${{ github.token }}
           ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RELAY_DOMAIN: ${{ steps.process.outputs.relay_domain }}
+          REPORT_HASH: ${{ steps.process.outputs.report_hash }}
+          REPORT_ARTIFACT_URL: ${{ steps.process.outputs.report_artifact_url }}
+          TOOL_COMMIT: ${{ steps.process.outputs.tool_commit }}
         run: |
+          set -euo pipefail
+          BRANCH="community/evidence-issue-${ISSUE_NUMBER}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add web/data/relays.json
+          git switch -c "${BRANCH}"
+          git add web/data/evidence.json
           if git diff --cached --quiet; then
-            echo "No relay data changes to commit."
+            echo "No evidence data changes to publish for review."
+            echo "pr_url=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git commit -m "Add community audit: ${ISSUE_AUTHOR} (#${ISSUE_NUMBER})"
-          git push origin HEAD:master
+          git commit -m "Add community evidence: ${RELAY_DOMAIN} (#${ISSUE_NUMBER})"
+          git push --force-with-lease origin "${BRANCH}"
+          cat > /tmp/evidence-pr-body.md <<EOF
+          ## Summary
 
-      - name: Comment success
-        if: steps.process.outputs.status == 'OK'
+          This PR publishes one community-submitted audit evidence record.
+
+          - Relay domain: \`${RELAY_DOMAIN}\`
+          - Source issue: #${ISSUE_NUMBER}
+          - Submitter: @${ISSUE_AUTHOR}
+          - Tool commit: \`${TOOL_COMMIT}\`
+          - Report artifact: ${REPORT_ARTIFACT_URL}
+          - Report hash: \`${REPORT_HASH}\`
+
+          ## Governance
+
+          This is not a trusted-relay certification, not a safety endorsement, and not a leaderboard ranking. It is a proposed entry in the Community Evidence Registry. Merge only after maintainer review confirms the submitted evidence shape and publication boundary.
+          EOF
+          if gh pr view "${BRANCH}" --json url --jq .url >/tmp/existing-pr-url 2>/dev/null; then
+            PR_URL="$(cat /tmp/existing-pr-url)"
+            gh pr edit "${BRANCH}" \
+              --title "Add community audit evidence: ${RELAY_DOMAIN} (#${ISSUE_NUMBER})" \
+              --body-file /tmp/evidence-pr-body.md
+          else
+            PR_URL="$(gh pr create \
+              --draft \
+              --base master \
+              --head "${BRANCH}" \
+              --title "Add community audit evidence: ${RELAY_DOMAIN} (#${ISSUE_NUMBER})" \
+              --body-file /tmp/evidence-pr-body.md)"
+          fi
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment evidence PR created
+        if: steps.process.outputs.status == 'SHAPE_VALID' && steps.evidence_pr.outputs.pr_url != ''
         uses: actions/github-script@v7
         with:
           script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['evidence-pr-created']
+            });
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: '✅ Audit submission processed and added to the leaderboard. Thank you!\n\n✅ 审计提交已处理并添加到排行榜，感谢贡献！'
+              body: `✅ Shape validation passed. A draft evidence-publication PR was created for maintainer review: ${process.env.PR_URL}\n\n✅ 格式校验通过。系统已创建待人工复核的证据发布 PR：${process.env.PR_URL}\n\nNote: this has not been published to master, is not a relay recommendation, and is not a trusted-relay certification or safety endorsement.`
             });
+        env:
+          PR_URL: ${{ steps.evidence_pr.outputs.pr_url }}
