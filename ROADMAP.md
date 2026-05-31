@@ -509,7 +509,10 @@ draft PR，给前端同事 (post-2026-04-20 handoff) 接管时一并审视后再
 > 测试覆盖 39 个 channel_classifier 用例 + 1 个 dual-distribution parity 测试
 > （锁住 TIER1_RULES / TIER2_WEIGHTS / TIER2_PRIORITY / TIER3_RELAY_ID_PATTERN）。
 > **2026-05-31 rebase after v1.8.2**: preserved the Step 5 identity-consistency
-> wording from PR #20 while keeping Step 14 informational-only.
+> wording from PR #20 while keeping Step 14 informational-only. Generic Google
+> edge/hosting headers (`server: Google Frontend`, `x-goog-*`, `via: google`)
+> no longer classify as `google-vertex`; Vertex now requires `msg_vrtx_` or
+> `vertex-2023-10-16`.
 > Final test count: 642/642 passing.
 
 > **2026-05-09 立项动机**：LLMprobe-engine (`competitors/LLMprobe-engine/src/channel-signature.ts`)

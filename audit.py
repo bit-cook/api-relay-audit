@@ -2241,11 +2241,11 @@ TIER2_WEIGHTS = {
         ("body", "bedrock-2023-05-31", 0.9),
     ],
     "google-vertex": [
+        # Deliberately require Vertex-specific id/body markers. Generic
+        # Google edge headers (server: Google Frontend, x-goog-*, via:
+        # google) are hosting-surface evidence, not upstream-channel proof.
         ("id_prefix", "msg_vrtx_", 1.0),
-        ("header_prefix", "x-goog-", 1.0),
         ("body", "vertex-2023-10-16", 0.9),
-        ("header_value_contains", ("server", "google"), 0.5),
-        ("header_value_contains", ("via", "google"), 0.5),
     ],
     "aws-apigateway": [
         ("header", "x-amz-apigw-id", 0.8),

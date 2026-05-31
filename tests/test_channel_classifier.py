@@ -107,23 +107,24 @@ class TestTier2Weighted:
         assert result["channel"] == "google-vertex"
         assert result["confidence"] == 1.0
 
-    def test_google_vertex_via_x_goog_header(self):
+    def test_x_goog_header_alone_does_not_over_attribute_vertex(self):
         result = classify_channel({"x-goog-trace": "abc"}, None, "")
-        assert result["channel"] == "google-vertex"
-        assert result["confidence"] == 1.0
+        assert result["channel"] == "unknown"
+        assert result["confidence"] == 0.0
 
-    def test_google_vertex_weak_signals_only_partial_confidence(self):
-        # server: google + via: google = 0.5 + 0.5 = 1.0 cap
+    def test_google_edge_headers_do_not_over_attribute_vertex(self):
+        # Generic Google Frontend / via headers identify an edge or hosting
+        # surface, not the actual upstream model-serving channel.
         result = classify_channel(
             {"server": "Google Frontend", "via": "1.1 google"}, None, ""
         )
-        assert result["channel"] == "google-vertex"
-        assert result["confidence"] == 1.0
+        assert result["channel"] == "unknown"
+        assert result["confidence"] == 0.0
 
-    def test_google_vertex_server_only_yields_low_score(self):
+    def test_google_frontend_server_only_does_not_classify(self):
         result = classify_channel({"server": "Google Frontend"}, None, "")
-        assert result["channel"] == "google-vertex"
-        assert result["confidence"] == 0.5
+        assert result["channel"] == "unknown"
+        assert result["confidence"] == 0.0
 
     def test_aws_apigateway_via_amz_apigw_id(self):
         result = classify_channel({"x-amz-apigw-id": "abc"}, None, "")
@@ -173,13 +174,14 @@ class TestTier2TieBreaking:
         )
         assert result["channel"] == "aws-bedrock"
 
-    def test_vertex_beats_apigateway_on_tie(self):
-        # Vertex 1.0, APIGW 0.8 -> Vertex wins on score, but also priority.
-        # Check explicit equal-score tie:
+    def test_vertex_body_marker_beats_apigateway(self):
+        # Vertex-specific body marker (0.9) beats API Gateway's generic gateway
+        # header (0.8), while x-goog-* alone is intentionally not enough.
         result = classify_channel(
-            {"x-goog-x": "y", "x-amz-apigw-id": "z"}, None, ""
+            {"x-amz-apigw-id": "z"},
+            None,
+            '{"anthropic_version":"vertex-2023-10-16"}',
         )
-        # Vertex score 1.0 > APIGW 0.8, score-based winner
         assert result["channel"] == "google-vertex"
 
     def test_apigateway_beats_anthropic_on_tie(self):
