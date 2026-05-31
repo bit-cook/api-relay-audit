@@ -17,6 +17,8 @@ reports/
 
 # Claude Code local settings (may contain personal paths + tool permissions)
 .claude/
+CLAUDE.md
+claude.md
 
 # OS
 .DS_Store
