@@ -16,16 +16,16 @@
 | 单文件版版本 | `v2.3` | `audit.py` docstring |
 | 步骤数 (Step N) | **14** | grep `Step N` in `scripts/audit.py` |
 | 步骤数 (单文件版) | 14 | grep `Step N` in `audit.py` |
-| 测试数 (pytest) | **642** | `pytest --collect-only` |
-| 测试数 (static) | 634 | grep `def test_*` in tests/ |
-| CLI flag 数 | 19 | grep `add_argument("--*")` |
+| 测试数 (pytest) | **672** | `pytest --collect-only` |
+| 测试数 (static) | 664 | grep `def test_*` in tests/ |
+| CLI flag 数 | 20 | grep `add_argument("--*")` |
 | profile 选项 | general, web3, full | argparse choices |
-| ROADMAP 上次更新 | 2026-05-31 | `ROADMAP.md` 头部 |
+| ROADMAP 上次更新 | 2026-06-01 | `ROADMAP.md` 头部 |
 | Codex review 提及次数 | 4 | grep `Codex review (cycle\|round)` 在 Shipped 节 |
 | Codex review 已编号轮次（最大） | 6 | grep `Nth Codex review round` |
 | Codex bug 累计（最新声称） | 18 | grep `cumulative N real bug` |
-| 测试数演进 (ROADMAP) | [546, 560, 562, 586, 642] | grep `Final test count: N/N passing` |
-| HEAD SHA | `b8f0379` | `git rev-parse HEAD` |
+| 测试数演进 (ROADMAP) | [546, 560, 562, 586, 642, 672] | grep `Final test count: N/N passing` |
+| HEAD SHA | `040676c` | `git rev-parse HEAD` |
 | HEAD 日期 | 2026-05-31 | `git log -1` |
 
 ## 一致性自检
@@ -37,7 +37,7 @@
 
 1. **外部竞品情报变化**：cctest.ai / hvoy.ai 的检测维度数、模型列表、价格——靠 `~/.claude/projects/.../memory/reference_*.md` 同步
 2. **新 feature 是否在文章里被提及**：脚本能列 CLI flags，但无法判断对外文章是否覆盖 `--transparent-log` 这类能力
-3. **措辞精度**：例如「11 维度」vs「13 步 / 9 进风险矩阵 / 2 informational」
+3. **措辞精度**：例如「11 维度」vs「14 步 / 9 进风险矩阵 / 2 informational」
 4. **日期 stamp**：文章 byline 日期 vs 实际发布日期
 5. **图/表内容完整性**：脚本不解析对外文档的表格
 

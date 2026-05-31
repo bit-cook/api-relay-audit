@@ -35,7 +35,7 @@
 
 ### 你会得到什么
 
-- 一个本地运行的 13 步审计工具，输出结构化 Markdown 报告
+- 一个本地运行的 14 步审计工具，输出结构化 Markdown 报告
 - 双分发形态: `audit.py` 单文件零依赖版 + `api_relay_audit/` 模块化开发版
 - `--profile general|web3|full` 三种运行模式
 - `LOW / MEDIUM / HIGH` 总结论，加每一步的细项结果
@@ -63,6 +63,7 @@ python audit.py --key <YOUR_KEY> --url <BASE_URL> --profile web3 --output report
 - 在线页 / GitHub Pages: [toby-bridges.github.io/api-relay-audit](https://toby-bridges.github.io/api-relay-audit/)
 - 路线图与明确不做: [ROADMAP.md](./ROADMAP.md)
 - 工程记录: [FOR_JOHN.md](./FOR_JOHN.md)
+- 贡献者 / Credits: [CONTRIBUTORS.md](./CONTRIBUTORS.md)
 - 社交媒体: [X @li9292](https://x.com/li9292)
 
 ---
@@ -75,7 +76,7 @@ python audit.py --key <YOUR_KEY> --url <BASE_URL> --profile web3 --output report
 
 ### What you get
 
-- A local 13-step audit that produces a structured Markdown report
+- A local 14-step audit that produces a structured Markdown report
 - Dual distribution: zero-dependency standalone `audit.py` plus modular `api_relay_audit/`
 - Three runtime profiles: `general`, `web3`, and `full`
 - One final `LOW / MEDIUM / HIGH` verdict plus per-step details
@@ -103,6 +104,7 @@ python audit.py --key <YOUR_KEY> --url <BASE_URL> --profile web3 --output report
 - GitHub Pages: [toby-bridges.github.io/api-relay-audit](https://toby-bridges.github.io/api-relay-audit/)
 - Shipped / deferred / explicitly not doing: [ROADMAP.md](./ROADMAP.md)
 - Engineering diary: [FOR_JOHN.md](./FOR_JOHN.md)
+- Contributors / Credits: [CONTRIBUTORS.md](./CONTRIBUTORS.md)
 - Social: [X @li9292](https://x.com/li9292)
 
 ## License

@@ -1,0 +1,30 @@
+name: Metrics Drift Check
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metrics-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # On pull_request, the default checkout is a synthetic merge commit.
+          # The metrics file records HEAD, so check the actual PR head instead.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install check dependencies
+        run: python -m pip install -r requirements.txt pytest
+
+      - name: Check generated metrics and public copy
+        run: python scripts/collect-metrics.py --check

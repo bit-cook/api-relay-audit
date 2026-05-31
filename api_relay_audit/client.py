@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from api_relay_audit import _transport
 from api_relay_audit.stream_integrity import StreamSignals
 
 
@@ -322,23 +323,14 @@ class APIClient:
     # -- Low-level transport --------------------------------------------------
 
     def _curl_post(self, url: str, headers: dict, body: dict) -> dict:
-        cmd = ["curl", "-sk", "-X", "POST", url, "--max-time", str(self.timeout),
-               "--config", "-"]
-        cmd.extend(["-d", json.dumps(body)])
-        config = "\n".join(f'header = "{k}: {v}"' for k, v in headers.items())
-        r = subprocess.run(cmd, capture_output=True, text=True, input=config,
-                           timeout=self.timeout + 10)
-        if r.returncode != 0:
-            raise RuntimeError(f"curl failed: {r.stderr[:200]}")
-        return json.loads(r.stdout)
+        return _transport.curl_post_json(
+            url, headers, body, self.timeout, subprocess_module=subprocess)
 
     def _post(self, url: str, headers: dict, body: dict) -> dict:
         if self._use_curl:
             return self._curl_post(url, headers, body)
-        r = httpx.post(url, headers=headers, json=body, timeout=self.timeout)
-        if r.status_code != 200:
-            return {"_http_error": f"HTTP {r.status_code}: {r.text[:200]}"}
-        return r.json()
+        return _transport.httpx_post_json(
+            url, headers, body, self.timeout, httpx_module=httpx)
 
     # -- Anthropic native format ----------------------------------------------
 
@@ -627,27 +619,23 @@ class APIClient:
         for headers in auth_variants:
             try:
                 if self._use_curl:
-                    cmd = ["curl", "-sk", url, "--max-time", "15", "--config", "-"]
-                    config = "\n".join(f'header = "{k}: {v}"' for k, v in headers.items())
-                    r = subprocess.run(cmd, capture_output=True, text=True, input=config, timeout=25)
-                    if r.returncode == 0:
-                        data = json.loads(r.stdout).get("data", [])
-                        if data:
-                            self._log_transparent(
-                                "get_models", url, "GET", None,
-                                json.dumps(data), 200, None,
-                                time.time() - start)
-                            return data
+                    data = _transport.curl_get_json_data(
+                        url, headers, subprocess_module=subprocess)
+                    if data:
+                        self._log_transparent(
+                            "get_models", url, "GET", None,
+                            json.dumps(data), 200, None,
+                            time.time() - start)
+                        return data
                 else:
-                    r = httpx.get(url, headers=headers, timeout=15)
-                    if r.status_code == 200:
-                        data = r.json().get("data", [])
-                        if data:
-                            self._log_transparent(
-                                "get_models", url, "GET", None,
-                                r.text, 200, dict(r.headers),
-                                time.time() - start)
-                            return data
+                    status, data, text, response_headers = _transport.httpx_get_json_data(
+                        url, headers, httpx_module=httpx)
+                    if status == 200 and data:
+                        self._log_transparent(
+                            "get_models", url, "GET", None,
+                            text, 200, response_headers,
+                            time.time() - start)
+                        return data
             except Exception:
                 continue
         self._log_transparent(
@@ -698,22 +686,12 @@ class APIClient:
                 time.time() - start, result.get("error"))
             return result
         try:
-            r = httpx.request(
-                method=method,
-                url=url,
-                headers={**headers, "content-type": content_type},
-                content=body,
-                timeout=timeout,
-            )
-            result = {
-                "status": r.status_code,
-                "headers": dict(r.headers),
-                "body": r.text,
-                "error": None,
-            }
+            result = _transport.httpx_raw_request(
+                method, url, headers, body, content_type, timeout,
+                httpx_module=httpx)
             self._log_transparent(
-                "raw_request", url, method, body, r.text,
-                r.status_code, dict(r.headers),
+                "raw_request", url, method, body, result.get("body"),
+                result.get("status", 0), result.get("headers"),
                 time.time() - start)
             return result
         except Exception as e:
@@ -739,22 +717,9 @@ class APIClient:
         Uses ``curl -sk -i -X <method>`` to capture both headers and body
         on stdout. Ignores self-signed certificate errors (``-k``).
         """
-        all_headers = {**headers, "content-type": content_type}
-        cmd = ["curl", "-sk", "-i", "-X", method, url,
-               "--max-time", str(timeout), "--data-binary", "@-"]
-        for k, v in all_headers.items():
-            cmd.extend(["-H", f"{k}: {v}"])
-        try:
-            r = subprocess.run(cmd, capture_output=True, input=body,
-                               timeout=timeout + 10)
-            if r.returncode != 0:
-                err = r.stderr.decode("utf-8", errors="replace")[:200]
-                return {"status": 0, "headers": {}, "body": "",
-                        "error": f"curl failed: {err}"}
-            output = r.stdout.decode("utf-8", errors="replace")
-            return _parse_curl_i_output(output)
-        except Exception as e:
-            return {"status": 0, "headers": {}, "body": "", "error": str(e)}
+        return _transport.curl_raw_request(
+            method, url, headers, body, content_type, timeout,
+            parser=_parse_curl_i_output, subprocess_module=subprocess)
 
     # -- Streaming (Step 10 stream integrity) --------------------------------
 

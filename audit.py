@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+# GENERATED STANDALONE ARTIFACT - DO NOT EDIT BY HAND.
+# Source of truth: modular files listed in scripts/build-standalone.py.
+# Regenerate after modular audit changes with:
+#   python3 scripts/build-standalone.py
+# CI verifies this header plus dual-distribution parity tests.
+# source_sha256: 9e38a6364d69dc028e2152bcfef5a8218df50ef0530f6635ad0f3037f29307cf
+# standalone_body_sha256: 3b7859251167b090ed485fedaeb1600b92fcf535d2c807731473f47debee2085
+# END GENERATED STANDALONE HEADER
+
 """
 API Relay Security Audit Tool v2.3 --- Standalone Edition
 
@@ -34,18 +43,69 @@ Combined from the modular distribution:
 """
 
 import argparse
+import hashlib
 import json
 import re
 import shlex
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+
+
+# ============================================================
+# Section 0: Transparent forensic logging (standalone)
+# ============================================================
+
+def redact_error(error):
+    """Strip response body content from error strings for safe logging."""
+    if error is None:
+        return None
+    for prefix in ("HTTP ", "curl failed"):
+        if error.startswith(prefix):
+            colon = error.find(":")
+            if colon != -1:
+                return error[:colon]
+            return error
+    return error
+
+
+def sha256hex(data):
+    """Return the SHA-256 hex digest of bytes/str input, or None."""
+    if data is None:
+        return None
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+class TransparentLogger:
+    """Append-only JSONL writer for forensic request logging."""
+
+    def __init__(self, path):
+        self._path = str(Path(path).expanduser())
+        log_path = Path(self._path)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._f = open(log_path, "a", encoding="utf-8")
+
+    def log_entry(self, entry):
+        try:
+            self._f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            self._f.flush()
+        except Exception as e:
+            print(f"  [transparent-log] write error: {e}", file=sys.stderr)
+
+    def close(self):
+        try:
+            self._f.close()
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -474,6 +534,7 @@ class APIClient:
         self.timeout = timeout
         self.verbose = verbose
         self._format = None   # "anthropic" | "openai" | None (auto)
+        self._transparent_logger = None
 
     @property
     def detected_format(self):
@@ -487,12 +548,27 @@ class APIClient:
 
     def _curl_post(self, url: str, headers: dict, body: dict) -> dict:
         """POST JSON via curl subprocess. Returns parsed JSON response."""
-        cmd = ["curl", "-sk", "-X", "POST", url, "--max-time", str(self.timeout),
-               "--config", "-"]
-        cmd.extend(["-d", json.dumps(body)])
-        config = "\n".join(f'header = "{k}: {v}"' for k, v in headers.items())
-        r = subprocess.run(cmd, capture_output=True, text=True, input=config,
-                           timeout=self.timeout + 10)
+        body_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", delete=False,
+                prefix="api-relay-body-", suffix=".json"
+            ) as tmp:
+                json.dump(body, tmp)
+                body_path = tmp.name
+
+            cmd = ["curl", "-sk", "-X", "POST", url, "--max-time", str(self.timeout),
+                   "--config", "-", "--data-binary", f"@{body_path}"]
+            config = "\n".join(f'header = "{k}: {v}"' for k, v in headers.items())
+            r = subprocess.run(cmd, capture_output=True, text=True, input=config,
+                               timeout=self.timeout + 10)
+        finally:
+            if body_path:
+                try:
+                    Path(body_path).unlink()
+                except OSError:
+                    pass
+
         if r.returncode != 0:
             raise RuntimeError(f"curl failed: {r.stderr[:200]}")
         return json.loads(r.stdout)
@@ -521,6 +597,33 @@ class APIClient:
             return {"_http_error": f"Invalid JSON response: {e}"}
         except Exception as e:
             return {"_http_error": str(e)}
+
+    # -- Transparent forensic logging ----------------------------------------
+
+    def set_transparent_logger(self, logger):
+        self._transparent_logger = logger
+
+    def _log_transparent(self, method_name, url, http_method, request_body_bytes,
+                         response_body_bytes, status_code, response_headers,
+                         elapsed, error=None):
+        if self._transparent_logger is None:
+            return
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "method": method_name,
+            "url": url,
+            "http_method": http_method,
+            "request_body_sha256": sha256hex(request_body_bytes),
+            "response_body_sha256": sha256hex(response_body_bytes),
+            "status_code": status_code,
+            "response_headers": response_headers,
+            "tls_version": None,
+            "tls_cipher": None,
+            "elapsed_seconds": round(elapsed, 3),
+            "transport": "curl",
+            "error": redact_error(error),
+        }
+        self._transparent_logger.log_entry(entry)
 
     # -- Anthropic native format ----------------------------------------------
 
@@ -607,12 +710,38 @@ class APIClient:
     def call(self, messages, system=None, max_tokens=512):
         """Send a chat completion request, auto-detecting format on first call."""
         start = time.time()
+        request_body = json.dumps({
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "system": system or "",
+        })
         try:
             result = self._call_with_detection(messages, system, max_tokens)
             result["time"] = time.time() - start
+            self._log_transparent(
+                "call", self._resolve_call_url(), "POST", request_body,
+                json.dumps(result.get("raw", {})),
+                200 if "error" not in result else 0, None,
+                result["time"], result.get("error"))
             return result
         except Exception as e:
-            return {"error": str(e), "time": time.time() - start}
+            elapsed = time.time() - start
+            self._log_transparent(
+                "call", self._resolve_call_url(), "POST", request_body,
+                None, 0, None, elapsed, str(e))
+            return {"error": str(e), "time": elapsed}
+
+    def _resolve_call_url(self):
+        if self._format == "openai":
+            url = self.base_url
+            if not url.endswith("/v1"):
+                url += "/v1"
+            return url + "/chat/completions"
+        url = self.base_url
+        if url.endswith("/v1"):
+            url = url[:-3]
+        return url + "/v1/messages"
 
     def _call_with_detection(self, messages, system, max_tokens):
         # Already detected -- use that format
@@ -669,14 +798,21 @@ class APIClient:
         if self._format == "anthropic":
             auth_variants.reverse()
 
+        start = time.time()
         for headers in auth_variants:
             try:
                 data = self._curl_get(url, headers)
                 models = data.get("data", [])
                 if models:
+                    self._log_transparent(
+                        "get_models", url, "GET", None, json.dumps(data),
+                        200, None, time.time() - start)
                     return models
             except Exception:
                 continue
+        self._log_transparent(
+            "get_models", url, "GET", None, None, 0, None,
+            time.time() - start, "all auth variants failed")
         return []
 
     # -- Raw request (Step 9 error-leakage probes) ----------------------------
@@ -699,6 +835,7 @@ class APIClient:
             base = base[:-3]
         url = base + path
 
+        start = time.time()
         all_headers = {**headers, "content-type": content_type}
         cmd = ["curl", "-sk", "-i", "-X", method, url,
                "--max-time", str(timeout), "--data-binary", "@-"]
@@ -709,11 +846,23 @@ class APIClient:
                                timeout=timeout + 10)
             if r.returncode != 0:
                 err = r.stderr.decode("utf-8", errors="replace")[:200]
-                return {"status": 0, "headers": {}, "body": "",
-                        "error": f"curl failed: {err}"}
+                result = {"status": 0, "headers": {}, "body": "",
+                          "error": f"curl failed: {err}"}
+                self._log_transparent(
+                    "raw_request", url, method, body, None, 0, None,
+                    time.time() - start, result["error"])
+                return result
             output = r.stdout.decode("utf-8", errors="replace")
-            return _parse_curl_i_output(output)
+            result = _parse_curl_i_output(output)
+            self._log_transparent(
+                "raw_request", url, method, body, result.get("body"),
+                result.get("status", 0), result.get("headers"),
+                time.time() - start, result.get("error"))
+            return result
         except Exception as e:
+            self._log_transparent(
+                "raw_request", url, method, body, None, 0, None,
+                time.time() - start, str(e))
             return {"status": 0, "headers": {}, "body": "", "error": str(e)}
 
     # -- Streaming (Step 10 stream integrity, v1.7) --------------------------
@@ -754,6 +903,7 @@ class APIClient:
 
         signals = StreamSignals()
         start = time.time()
+        request_body = json.dumps(body)
         try:
             self._stream_via_curl(url, headers, body, timeout, signals)
         except Exception as e:
@@ -761,6 +911,15 @@ class APIClient:
                 signals.transport_error = str(e)
         finally:
             signals.total_duration_seconds = time.time() - start
+            self._log_transparent(
+                "stream_call", url, "POST", request_body,
+                json.dumps({
+                    "event_types": signals.event_types,
+                    "raw_event_count": signals.raw_event_count,
+                    "transport_error": signals.transport_error,
+                }),
+                0 if signals.transport_error else 200, None,
+                signals.total_duration_seconds, signals.transport_error)
         return signals
 
     def _stream_via_curl(self, url, headers, body, timeout, signals):
@@ -2475,6 +2634,10 @@ def parse_args():
     p.add_argument("--model", default="claude-opus-4-6", help="Model name")
     p.add_argument("--skip-infra", action="store_true", help="Skip infrastructure recon")
     p.add_argument("--skip-context", action="store_true", help="Skip context length test")
+    p.add_argument("--fast-context", action="store_true",
+                   help="Use a reduced Step 7 context scan ladder "
+                        "(10K/50K/100K/200K chars) to lower token cost. "
+                        "Default is the full scan.")
     p.add_argument("--skip-tool-substitution", action="store_true",
                    help="Skip tool-call package substitution test (AC-1.a)")
     p.add_argument("--skip-error-leakage", action="store_true",
@@ -2488,9 +2651,13 @@ def parse_args():
     p.add_argument("--profile", choices=["general", "web3", "full"],
                    default="general",
                    help="Audit profile selector. 'general' (default) runs "
-                        "Steps 1-10 for regular API relay users. 'web3' adds "
-                        "Web3 prompt injection (Step 11) for wallet users. "
-                        "'full' enables everything.")
+                        "Steps 1-10 — suitable for regular API relay users. "
+                        "'web3' adds Web3-specific checks (Step 11 prompt "
+                        "injection targeting private keys / transaction "
+                        "signing / transfer guidance) for wallet users. "
+                        "'full' enables everything including future web3 "
+                        "steps. Profile gating allows the same tool to serve "
+                        "both general and Web3 audiences without branch splits.")
     p.add_argument("--skip-web3-injection", action="store_true",
                    help="Skip Step 11 Web3 prompt injection probes "
                         "(only runs under --profile web3 or full).")
@@ -2517,6 +2684,10 @@ def parse_args():
                         "request-count-gated backdoors (AC-1.b). Default: 0")
     p.add_argument("--timeout", type=int, default=120, help="Request timeout in seconds")
     p.add_argument("--output", default=None, help="Report output path (markdown)")
+    p.add_argument("--transparent-log", default=None, metavar="PATH",
+                   help="Path to an append-only JSONL forensic log (arXiv §7.3). "
+                        "Every API request is recorded with timestamp, URL, "
+                        "SHA-256 of request/response, and status code.")
     return p.parse_args()
 
 
@@ -3353,12 +3524,20 @@ def test_web3_injection(client, report):
     return verdict, inconclusive
 
 
-def test_context_length(client, report):
+def test_context_length(client, report, fast_mode=False):
     report.h2("7. Context Length Test")
     report.p("Place 5 canary markers at equal intervals in long text, check if model can recall all.\n")
+    coarse_steps = None
+    if fast_mode:
+        coarse_steps = [10, 50, 100, 200]
+        report.p(
+            "_Fast context mode enabled: Step 7 only tests 10K/50K/100K/200K "
+            "chars before the normal boundary refinement. Default full scan "
+            "remains recommended for publication-grade audits._\n"
+        )
 
     print("  Context scan: ", end="", flush=True)
-    results = run_context_scan(client)
+    results = run_context_scan(client, coarse_steps=coarse_steps)
     print(" done")
 
     # Output table
@@ -3707,6 +3886,10 @@ def _run_step(name, reporter, step_fn, *args, default=None, crashes=None):
 def main():
     args = parse_args()
     client = APIClient(args.url, args.key, args.model, timeout=args.timeout)
+    _transparent_logger = None
+    if args.transparent_log:
+        _transparent_logger = TransparentLogger(args.transparent_log)
+        client.set_transparent_logger(_transparent_logger)
     report = Reporter()
 
     print(f"\n{'=' * 60}")
@@ -3777,7 +3960,7 @@ def main():
     if not args.skip_context:
         print("[7/14] Context length test...")
         _run_step("Step 7 context length", report,
-                  test_context_length, client, report,
+                  test_context_length, client, report, args.fast_context,
                   crashes=step_crashes)
     else:
         print("[7/14] Context length test (skipped)")
@@ -4028,6 +4211,10 @@ def main():
     print(f"\n{'=' * 60}")
     print("  Audit complete")
     print(f"{'=' * 60}\n")
+
+    if _transparent_logger is not None:
+        _transparent_logger.close()
+        print(f"  Transparent log: {args.transparent_log}")
 
 
 if __name__ == "__main__":

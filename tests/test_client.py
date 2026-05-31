@@ -320,6 +320,10 @@ class TestCurlFallback:
         assert "https://relay.example.com/v1/messages" in cmd
         assert "--config" in cmd
         assert "-" in cmd
+        assert "--data-binary" in cmd
+        body_arg = cmd[cmd.index("--data-binary") + 1]
+        assert body_arg.startswith("@")
+        assert '{"model": "test"}' not in cmd
         config_input = mock_run.call_args[1].get("input", "")
         assert "x-api-key: sk-test" in config_input
 
@@ -395,6 +399,24 @@ class TestAutoDetection:
         mock_post.reset_mock()
         client.call([{"role": "user", "content": "2"}])
         assert mock_post.call_count == 1
+
+    @patch("api_relay_audit.client.httpx.post")
+    def test_ensure_format_real_body_detects_anthropic(self, mock_post, client):
+        """Exercise the real APIClient.ensure_format() body, not just the
+        latency runner's call ordering."""
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "content": [{"text": "detected"}],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        mock_post.return_value = resp
+
+        client.ensure_format()
+
+        assert client.detected_format == "anthropic"
+        assert mock_post.call_count == 1
+        assert mock_post.call_args[0][0] == "https://relay.example.com/v1/messages"
+        assert mock_post.call_args[1]["json"]["max_tokens"] == 1
 
     @patch("api_relay_audit.client.httpx.post")
     def test_both_formats_fail_returns_error(self, mock_post, client):

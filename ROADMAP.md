@@ -6,7 +6,7 @@ item has a short rationale so future contributors (including future
 iterations of the author) can quickly reconstruct why a thing is or is not
 on the list.
 
-**Last updated**: 2026-05-31 (Step 14 channel classifier rebased after v1.8.2 identity-consistency wording; LLMprobe-engine `channel-signature.ts` clean-room implementation kept informational-only and aligned with no-over-attribution policy)
+**Last updated**: 2026-06-01 (dual-distribution generation contract and CI drift gates landed; standalone remains first-class curl-only artifact while modular source becomes the source of truth)
 
 **Threat model anchor**: Liu et al., *Your Agent Is Mine: Measuring
 Malicious Intermediary Attacks on the LLM Supply Chain*, arXiv:2604.08407.
@@ -21,6 +21,36 @@ contributor, arXiv:2026-04-26, 正交威胁轴：模型替换质量欺诈 vs 我
 ---
 
 ## ✅ Shipped
+
+### v1.9 — Dual-distribution generation contract (2026-06-01)
+- **Standalone product promise preserved**: root `audit.py` stays committed,
+  curl-downloadable, stdlib + curl only. It is now marked as a generated
+  artifact with an embedded modular-source digest instead of silently
+  remaining a hand-edited second implementation.
+- **Phase 1 contract + CI gate**: added
+  `scripts/build-standalone.py --check` and GitHub Actions drift gates for
+  standalone generation, public metrics, and dual-distribution parity tests.
+  `scripts/collect-metrics.py --check` now fails on README / web /
+  `docs/_metrics.md` step/test/version/HEAD drift.
+- **Phase 2 low-blast source-of-truth moves**: extracted Step 4/6 refusal
+  vocabulary/helpers into `api_relay_audit/refusal.py` with
+  `scripts.audit` re-exports for compatibility; extracted internal
+  httpx/curl request mechanics into `api_relay_audit/_transport.py` while
+  keeping `APIClient` public imports unchanged and standalone flat.
+- **ROADMAP 2.4 coverage closed**: real-body `APIClient.ensure_format()`
+  tests now cover modular and standalone behavior; argparse-level
+  `--latency-probe-count` wiring is pinned on both distributions.
+- **Issue #14 downstream-fork uptake**: credited
+  [@liuwei71320](https://github.com/liuwei71320) in `CONTRIBUTORS.md` for
+  `ai-relay-audit-gui`; upstreamed the Windows long-context stability
+  finding by moving curl POST bodies out of argv, and added explicit
+  `--fast-context` opt-in for low-cost Step 7 scans while keeping full scan
+  as the default.
+- **Boundary held**: no hosted dashboard, no new dependency, no Claude Code
+  header impersonation, no knowledge-cutoff/0-100/4-level risk/OpenAI
+  streaming auto-detect, no copied closed-source fingerprint table.
+- **Final test count**: 672/672 passing (642 baseline → 672 after current
+  guardrail/contract tests).
 
 ### v2.1 and earlier (pre-session baseline)
 - Steps 1-7: infrastructure recon / model list / token injection via delta

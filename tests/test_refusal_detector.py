@@ -244,6 +244,14 @@ class TestHiddenPromptSelfCorrection:
 
 class TestRefusalMarkerParity:
 
+    def test_modular_script_re_exports_refusal_source_of_truth(self, modular):
+        from api_relay_audit import refusal
+
+        assert modular.REFUSAL_MARKERS is refusal.REFUSAL_MARKERS
+        assert modular.RETRACTION_MARKERS is refusal.RETRACTION_MARKERS
+        assert modular._looks_like_refusal is refusal._looks_like_refusal
+        assert modular._matches_structural_leak is refusal._matches_structural_leak
+
     def test_markers_identical(self, modular, standalone):
         assert tuple(modular.REFUSAL_MARKERS) == tuple(standalone.REFUSAL_MARKERS), (
             "REFUSAL_MARKERS drift between scripts/audit.py and audit.py. "

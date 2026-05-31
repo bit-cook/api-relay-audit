@@ -23,6 +23,8 @@ drifting 21 days behind code).
 """
 
 import json
+import argparse
+import difflib
 import re
 import subprocess
 import sys
@@ -32,6 +34,30 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
+METRICS_JSON = DOCS_DIR / "_metrics.json"
+METRICS_MD = DOCS_DIR / "_metrics.md"
+
+
+STEP_PATTERNS = [
+    (r'\b(\d+)-step audit\b', "N-step audit"),
+    (r'\bfull (\d+)-step audit\b', "full N-step audit"),
+    (r'\bruns? all (\d+) steps\b', "runs all N steps"),
+    (r'\b(\d+) steps\b', "N steps"),
+    (r'\[Step \d+/(\d+)\]', "Step X/N terminal text"),
+    (r'(\d+) 步审计', "N 步审计"),
+    (r'(\d+) 步检测', "N 步检测"),
+    (r'运行 (\d+) 步审计', "运行 N 步审计"),
+    (r'运行 (\d+) 步检测', "运行 N 步检测"),
+    (r'覆盖 (\d+) 个审计步骤', "覆盖 N 个审计步骤"),
+]
+
+TEST_COUNT_PATTERNS = [
+    (
+        r'<div class="stat-num">(\d+)</div><div class="stat-label" '
+        r'data-i18n="stat_tests">',
+        "web Unit Tests stat",
+    ),
+]
 
 
 def read(path):
@@ -102,7 +128,12 @@ def get_roadmap_metrics(roadmap_path):
     out["codex_bugs_cumulative_latest"] = int(cumulative[-1]) if cumulative else None
 
     progression = re.findall(r'Final test count.*?(\d+)/(\d+)\s+passing', text)
-    out["test_count_progression"] = [int(p) for p, t in progression]
+    out["test_count_progression"] = sorted({int(p) for p, t in progression})
+    out["test_count_progression_latest"] = (
+        max(out["test_count_progression"])
+        if out["test_count_progression"]
+        else None
+    )
 
     # Extract "Nth Codex review round" / "Nth round" if present
     nth = re.findall(r'(\d+)(?:st|nd|rd|th) Codex review round', text)
@@ -111,17 +142,17 @@ def get_roadmap_metrics(roadmap_path):
     return out
 
 
-def get_git_metadata():
+def get_git_metadata(ref="HEAD"):
     out = {}
     try:
         sha = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "rev-parse", "--short", ref],
             cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=10
         )
         if sha.returncode == 0:
             out["head_sha"] = sha.stdout.strip()
         date = subprocess.run(
-            ["git", "log", "-1", "--format=%cd", "--date=short"],
+            ["git", "log", "-1", "--format=%cd", "--date=short", ref],
             cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=10
         )
         if date.returncode == 0:
@@ -193,9 +224,10 @@ def build_markdown(m):
         )
 
     progression = m.get("test_count_progression") or []
-    if progression and m["test_count_pytest"] and progression[-1] != m["test_count_pytest"]:
+    progression_latest = m.get("test_count_progression_latest")
+    if progression_latest and m["test_count_pytest"] and progression_latest != m["test_count_pytest"]:
         lines.append(
-            f"- ⚠️ ROADMAP 最后一次记录 {progression[-1]} 个测试，但当前 pytest 是 "
+            f"- ⚠️ ROADMAP 最新记录 {progression_latest} 个测试，但当前 pytest 是 "
             f"{m['test_count_pytest']}。要么 ROADMAP 漏更新，要么有未记录的新测试。"
         )
 
@@ -205,7 +237,7 @@ def build_markdown(m):
         "",
         "1. **外部竞品情报变化**：cctest.ai / hvoy.ai 的检测维度数、模型列表、价格——靠 `~/.claude/projects/.../memory/reference_*.md` 同步",
         "2. **新 feature 是否在文章里被提及**：脚本能列 CLI flags，但无法判断对外文章是否覆盖 `--transparent-log` 这类能力",
-        "3. **措辞精度**：例如「11 维度」vs「13 步 / 9 进风险矩阵 / 2 informational」",
+        "3. **措辞精度**：例如「11 维度」vs「14 步 / 9 进风险矩阵 / 2 informational」",
         "4. **日期 stamp**：文章 byline 日期 vs 实际发布日期",
         "5. **图/表内容完整性**：脚本不解析对外文档的表格",
         "",
@@ -219,7 +251,7 @@ def build_markdown(m):
     return "\n".join(lines) + "\n"
 
 
-def main():
+def collect_metrics():
     standalone = REPO_ROOT / "audit.py"
     modular = REPO_ROOT / "scripts" / "audit.py"
     roadmap = REPO_ROOT / "ROADMAP.md"
@@ -238,15 +270,21 @@ def main():
     }
     metrics.update(get_roadmap_metrics(roadmap))
     metrics.update(get_git_metadata())
+    return metrics
 
+
+def write_metrics(metrics):
     DOCS_DIR.mkdir(exist_ok=True)
-    json_path = DOCS_DIR / "_metrics.json"
-    md_path = DOCS_DIR / "_metrics.md"
-    json_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
-    md_path.write_text(build_markdown(metrics), encoding="utf-8")
+    METRICS_JSON.write_text(
+        json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    METRICS_MD.write_text(build_markdown(metrics), encoding="utf-8")
 
-    print(f"Wrote {json_path.relative_to(REPO_ROOT)}")
-    print(f"Wrote {md_path.relative_to(REPO_ROOT)}")
+    print(f"Wrote {METRICS_JSON.relative_to(REPO_ROOT)}")
+    print(f"Wrote {METRICS_MD.relative_to(REPO_ROOT)}")
+
+
+def print_summary(metrics):
     print()
     print(f"  version (modular):    {metrics['version_modular']}")
     print(f"  version (standalone): {metrics['version_standalone']}")
@@ -256,6 +294,147 @@ def main():
     print(f"  profile choices:      {metrics['profile_choices']}")
     print(f"  Codex review mentions: {metrics.get('codex_review_phrase_mentions')} (last numbered: {metrics.get('last_numbered_review_round')})")
     print(f"  Codex bugs (cumulative): {metrics.get('codex_bugs_cumulative_latest')}")
+
+
+def _line_number(text, index):
+    return text.count("\n", 0, index) + 1
+
+
+def _metrics_with_git_ref(metrics, ref):
+    git_metadata = get_git_metadata(ref)
+    if "head_sha" not in git_metadata:
+        return None
+    out = dict(metrics)
+    out.pop("head_sha", None)
+    out.pop("head_date", None)
+    out.update(git_metadata)
+    return out
+
+
+def _check_file_matches_any(path, expected_texts, diff_expected):
+    if not path.exists():
+        return [f"{path.relative_to(REPO_ROOT)} is missing; run scripts/collect-metrics.py"]
+    current = read(path)
+    if current in expected_texts:
+        return []
+
+    diff = "\n".join(
+        difflib.unified_diff(
+            current.splitlines(),
+            diff_expected.splitlines(),
+            fromfile=f"{path.relative_to(REPO_ROOT)} (current)",
+            tofile=f"{path.relative_to(REPO_ROOT)} (expected)",
+            lineterm="",
+            n=3,
+        )
+    )
+    return [
+        f"{path.relative_to(REPO_ROOT)} is stale; run scripts/collect-metrics.py",
+        diff,
+    ]
+
+
+def _check_numeric_mentions(path, patterns, expected, metric_name):
+    if expected is None:
+        return []
+    text = read(path)
+    failures = []
+    for pattern, description in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            value = int(match.group(1))
+            if value != expected:
+                line = _line_number(text, match.start(1))
+                failures.append(
+                    f"{path.relative_to(REPO_ROOT)}:{line}: {description} "
+                    f"uses {value}, expected {expected} for {metric_name}"
+                )
+    return failures
+
+
+def check_public_doc_drift(metrics):
+    failures = []
+
+    public_docs = [
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "web" / "index.html",
+    ]
+    for path in public_docs:
+        if not path.exists():
+            continue
+        failures.extend(
+            _check_numeric_mentions(
+                path,
+                STEP_PATTERNS,
+                metrics["step_count_modular"],
+                "step count",
+            )
+        )
+
+    web_index = REPO_ROOT / "web" / "index.html"
+    if web_index.exists():
+        failures.extend(
+            _check_numeric_mentions(
+                web_index,
+                TEST_COUNT_PATTERNS,
+                metrics["test_count_pytest"],
+                "pytest test count",
+            )
+        )
+
+    return failures
+
+
+def check_metrics(metrics):
+    failures = []
+    # A committed metrics file cannot embed its own final commit SHA because
+    # changing the file changes the commit. Accept either the current HEAD
+    # (normal local pre-commit check) or HEAD^ (normal CI check after the
+    # metrics update has been committed). Older HEAD stamps still fail.
+    expected_metrics = [metrics]
+    parent_metrics = _metrics_with_git_ref(metrics, "HEAD^")
+    if parent_metrics:
+        expected_metrics.append(parent_metrics)
+    expected_texts = [build_markdown(m) for m in expected_metrics]
+    failures.extend(
+        _check_file_matches_any(METRICS_MD, expected_texts, build_markdown(metrics))
+    )
+    failures.extend(check_public_doc_drift(metrics))
+    return failures
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Collect or check machine-derivable project metrics."
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Do not write files. Fail if docs/_metrics.md, README.md, or "
+            "web/index.html have stale step/test/version/HEAD-derived metrics."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    metrics = collect_metrics()
+
+    if args.check:
+        failures = check_metrics(metrics)
+        if failures:
+            print("Metrics drift detected:", file=sys.stderr)
+            for failure in failures:
+                print(failure, file=sys.stderr)
+            print("\nRegenerate with: python3 scripts/collect-metrics.py", file=sys.stderr)
+            sys.exit(1)
+        print("Metrics drift check passed.")
+        print_summary(metrics)
+        return
+
+    write_metrics(metrics)
+    print_summary(metrics)
 
 
 if __name__ == "__main__":

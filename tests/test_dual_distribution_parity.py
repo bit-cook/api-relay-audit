@@ -10,7 +10,13 @@ risk-matrix block from both files and asserts they are character-identical
 so that drift is caught immediately.
 """
 
+import sys
+import re
+import subprocess
+import json
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -332,3 +338,183 @@ def test_standalone_stream_model_helper_parity():
         assert _check_stream_model(modular_signals) == standalone._check_stream_model(
             standalone_signals
         ), f"Standalone stream-model helper drift for model={model!r}"
+
+
+def _assert_parser_rejects_latency_probe_count(module, monkeypatch, value):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit.py",
+            "--key",
+            "sk-test",
+            "--url",
+            "https://relay.example.com/v1",
+            "--latency-probe-count",
+            str(value),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        module.parse_args()
+    assert exc.value.code == 2
+
+
+def test_latency_probe_count_argparse_wiring_rejects_invalid_values(monkeypatch):
+    """Regression: validate_probe_count must be wired into argparse on both
+    distributions, not only tested as a bare helper."""
+    import scripts.audit as modular
+    from api_relay_audit.latency_variance import LATENCY_PROBE_MAX, LATENCY_PROBE_MIN
+
+    standalone = _load_standalone_audit()
+
+    for module in (modular, standalone):
+        for value in (LATENCY_PROBE_MIN - 1, 0, -1, LATENCY_PROBE_MAX + 1):
+            _assert_parser_rejects_latency_probe_count(module, monkeypatch, value)
+
+
+def test_standalone_ensure_format_real_body_detects_anthropic(monkeypatch):
+    """Mirror the ensure_format body coverage onto the curl-only artifact."""
+    standalone = _load_standalone_audit()
+    client = standalone.APIClient(
+        "https://relay.example.com/v1",
+        "sk-test",
+        "claude-3-haiku",
+        verbose=False,
+    )
+    calls = []
+
+    def fake_curl_post(url, headers, body):
+        calls.append((url, headers, body))
+        return {
+            "content": [{"text": "detected"}],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    monkeypatch.setattr(client, "_curl_post", fake_curl_post)
+
+    client.ensure_format()
+
+    assert client.detected_format == "anthropic"
+    assert len(calls) == 1
+    assert calls[0][0] == "https://relay.example.com/v1/messages"
+    assert calls[0][2]["max_tokens"] == 1
+
+
+def _help_option_set(path):
+    result = subprocess.run(
+        [sys.executable, str(path), "--help"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    return set(re.findall(r"--[a-z0-9-]+", result.stdout))
+
+
+def test_public_help_flags_parity():
+    """Both curl-only and modular entrypoints must expose the same public
+    CLI flags even when their implementations differ internally."""
+    modular_flags = _help_option_set(REPO_ROOT / "scripts" / "audit.py")
+    standalone_flags = _help_option_set(REPO_ROOT / "audit.py")
+    assert modular_flags == standalone_flags
+
+
+def test_standalone_transparent_log_call_writes_entry(tmp_path, monkeypatch):
+    """The standalone --transparent-log flag must be backed by real logging,
+    not merely accepted by argparse."""
+    standalone = _load_standalone_audit()
+    client = standalone.APIClient(
+        "https://relay.example.com/v1",
+        "sk-test",
+        "claude-3-haiku",
+        verbose=False,
+    )
+    path = tmp_path / "audit.jsonl"
+    logger = standalone.TransparentLogger(str(path))
+    client.set_transparent_logger(logger)
+    client._format = "anthropic"
+
+    def fake_call_with_detection(messages, system, max_tokens):
+        return {
+            "text": "ok",
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "raw": {"id": "msg_1"},
+        }
+
+    monkeypatch.setattr(client, "_call_with_detection", fake_call_with_detection)
+
+    client.call([{"role": "user", "content": "hi"}])
+    logger.close()
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["method"] == "call"
+    assert entry["transport"] == "curl"
+    assert entry["status_code"] == 200
+    assert entry["request_body_sha256"] is not None
+    assert entry["response_body_sha256"] is not None
+
+
+def test_fast_context_scan_wiring_parity(monkeypatch):
+    """--fast-context should feed the same reduced Step 7 ladder into both
+    distributions without changing the default full-scan path."""
+    import scripts.audit as modular
+    from unittest.mock import MagicMock
+
+    standalone = _load_standalone_audit()
+
+    for module in (modular, standalone):
+        seen = []
+
+        def fake_run_context_scan(client, coarse_steps=None):
+            seen.append(coarse_steps)
+            return [(10, 5, 5, 1000, "ok", 0.1)]
+
+        monkeypatch.setattr(module, "run_context_scan", fake_run_context_scan)
+
+        report = MagicMock()
+        module.test_context_length(MagicMock(), report, fast_mode=False)
+        module.test_context_length(MagicMock(), report, fast_mode=True)
+
+        assert seen == [None, [10, 50, 100, 200]]
+
+
+def test_standalone_curl_post_keeps_large_body_out_of_argv(monkeypatch):
+    """Issue #14: standalone curl POST must not put long JSON bodies or
+    credentials in process argv."""
+    standalone = _load_standalone_audit()
+    client = standalone.APIClient(
+        "https://relay.example.com/v1",
+        "sk-test",
+        "claude-3-haiku",
+        verbose=False,
+    )
+    calls = []
+
+    class FakeRunResult:
+        returncode = 0
+        stdout = '{"ok": true}'
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return FakeRunResult()
+
+    monkeypatch.setattr(standalone.subprocess, "run", fake_run)
+
+    client._curl_post(
+        "https://relay.example.com/v1/messages",
+        {"x-api-key": "sk-test", "content-type": "application/json"},
+        {"model": "test", "messages": [{"content": "x" * 40000}]},
+    )
+
+    cmd, kwargs = calls[0]
+    cmd_text = " ".join(cmd)
+    assert "--data-binary" in cmd
+    assert cmd[cmd.index("--data-binary") + 1].startswith("@")
+    assert "x" * 100 not in cmd_text
+    assert "sk-test" not in cmd_text
+    assert "x-api-key: sk-test" in kwargs["input"]
