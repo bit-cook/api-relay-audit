@@ -499,7 +499,8 @@ draft PR，给前端同事 (post-2026-04-20 handoff) 接管时一并审视后再
 
 > **实现**：`api_relay_audit/channel_classifier.py`（modular）+
 > `audit.py` Section 3h（standalone），告别 protobuf 路线，采用 LLMprobe-engine
-> 的 header/id-prefix/body 三层规则方案（clean-room reimplementation, AGPL-3.0 不复制源码）。
+> 的 header/id-prefix/body 三层规则方案（clean-room reimplementation；全仓库改为
+> AGPL-3.0-only 后，未来可在保留归属、许可证和源码义务的前提下兼容引入）。
 > 标签集只覆盖 Step 12 看不见的 7 个上游：openrouter, cloudflare-ai-gateway,
 > aws-bedrock, google-vertex, aws-apigateway, anthropic-official, anthropic-relay
 > （Tier 3 `msg_01...` 推断）+ unknown 兜底。Step 12 已覆盖的 9 个 channel
@@ -626,8 +627,9 @@ like Step 12/13）。
 
 #### 2.6.3 LLMprobe-engine 其他借鉴点 (2026-05-09, 未计划实现时间)
 
-来自 `competitors/LLMprobe-engine/`，朋友项目（未来 contributor），AGPL-3.0 不能复制
-代码但可 clean-room 参考算法：
+来自 `competitors/LLMprobe-engine/`，朋友项目（未来 contributor）。在 MIT 阶段只能
+clean-room 参考算法；全仓库改为 AGPL-3.0-only 后，可在保留归属、许可证和源码义务
+的前提下兼容引入或改写：
 
 1. **Bayesian log-odds identity scorer** (`fingerprint-bayesian.ts`)：
    用 softmax 归一化的 log-likelihood ratio 替代我们 Step 5 的布尔关键词检测，

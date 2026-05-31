@@ -107,7 +107,10 @@ python audit.py --key <YOUR_KEY> --url <BASE_URL> --profile web3 --output report
 
 ## License
 
-MIT
+AGPL-3.0-only. See [LICENSE](./LICENSE).
+
+This keeps modified network-service deployments accountable to the same public
+source-availability standard as the relay ecosystem evidence we audit.
 
 ## Star History
 

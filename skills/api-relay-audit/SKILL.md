@@ -3,7 +3,7 @@ name: api-relay-audit
 description: Use when auditing third-party AI API relays, proxy APIs, or API-key resale services for hidden prompt injection, prompt leakage, instruction override, context truncation, tool-call substitution, error leakage, SSE stream anomalies, Web3 wallet-safety prompt injection, infrastructure fingerprints, and latency variance.
 version: 2.3.0
 author: Toby Bridges
-license: MIT
+license: AGPL-3.0-only
 platforms: [linux, macos]
 metadata:
   hermes:
