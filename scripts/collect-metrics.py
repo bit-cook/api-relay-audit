@@ -193,9 +193,15 @@ def build_markdown(m):
         f"| 测试数演进 (ROADMAP) | {m.get('test_count_progression') or []} | grep `Final test count: N/N passing` |",
     ]
     if "head_sha" in m:
-        lines.append(f"| HEAD SHA | `{m['head_sha']}` | `git rev-parse HEAD` |")
+        lines.append(
+            f"| Recorded commit SHA | `{m['head_sha']}` | recent reachable commit; "
+            "`--check` allows follow-up metrics commits |"
+        )
     if "head_date" in m:
-        lines.append(f"| HEAD 日期 | {m['head_date']} | `git log -1` |")
+        lines.append(
+            f"| Recorded commit date | {m['head_date']} | recent reachable commit; "
+            "`--check` allows follow-up metrics commits |"
+        )
 
     lines += ["", "## 一致性自检", ""]
     if m["version_modular"] != m["version_standalone"]:

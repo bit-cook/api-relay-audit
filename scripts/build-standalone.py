@@ -385,7 +385,6 @@ SECTIONS = (
     Section(
         "Upstream channel classifier",
         "api_relay_audit/channel_classifier.py",
-        token_renames={"_BODY_SCAN_LIMIT": "_CHANNEL_BODY_SCAN_LIMIT"},
     ),
     Section(
         "Audit orchestration",

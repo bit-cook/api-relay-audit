@@ -4,8 +4,8 @@
 # Regenerate after modular audit changes with:
 #   python3 scripts/build-standalone.py
 # CI verifies this generated artifact plus key behavior regressions.
-# source_sha256: dd5c428b9572be80025794b932c2556f5ae4af58ad3f6fdbc3a19a5b18765e9e
-# standalone_body_sha256: 50547d88671191fee01ffe13e5b384ba34f9964dda2b3e437c4abdc0b8032580
+# source_sha256: 5f85f8ebfbe55af943e3d9d8373e40d6b6eb8ff3750992a4cd1a95266ef8dfc9
+# standalone_body_sha256: 5cb26d68e341fc24b225d77aede54b7a5b26117d115d8e03de7dde151cf616ca
 # END GENERATED STANDALONE HEADER
 
 """
@@ -4021,7 +4021,7 @@ def _signal_fires(signal_type, signal_value, headers_lower, message_id, body_tru
 
     All inputs are pre-normalized: headers_lower is a lowercased name->value
     dict, message_id is a string (possibly empty), body_truncated is a
-    string truncated to _BODY_SCAN_LIMIT.
+    string truncated to _CHANNEL_BODY_SCAN_LIMIT.
     """
     if signal_type == "id_prefix":
         return bool(message_id) and message_id.startswith(signal_value)

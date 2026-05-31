@@ -88,11 +88,11 @@ def test_identity_keywords_standalone_parity():
 
     assert standalone.NON_CLAUDE_IDENTITY_KEYWORDS == MODULAR_KEYWORDS, (
         "Identity keyword tuple drift between api_relay_audit/identity_patterns.py "
-        "and standalone audit.py. Mirror the change into both."
+        "and standalone audit.py. Update modular source and regenerate audit.py."
     )
     assert standalone._NON_CLAUDE_STRICT_KEYWORDS == MODULAR_STRICT, (
         "Strict-keyword frozenset drift between identity_patterns.py and "
-        "standalone audit.py. Mirror the change into both."
+        "standalone audit.py. Update modular source and regenerate audit.py."
     )
 
 
@@ -152,7 +152,7 @@ def test_infra_fingerprint_constants_parity():
 
     assert standalone.FRAMEWORK_SIGNATURES == MODULAR_SIGS, (
         "FRAMEWORK_SIGNATURES drift between api_relay_audit/infra_fingerprint.py "
-        "and standalone audit.py. Mirror the change into both -- signal order "
+        "and standalone audit.py. Regenerate audit.py -- signal order "
         "matters (specific frameworks before generic ones)."
     )
     assert standalone.INFORMATIVE_HEADERS == MODULAR_HEADERS, (
@@ -179,6 +179,7 @@ def test_channel_classifier_constants_parity():
         TIER2_WEIGHTS as MODULAR_TIER2_WEIGHTS,
         TIER3_RELAY_CONFIDENCE as MODULAR_TIER3_CONFIDENCE,
         TIER3_RELAY_ID_PATTERN as MODULAR_TIER3_PATTERN,
+        _CHANNEL_BODY_SCAN_LIMIT as MODULAR_CHANNEL_BODY_LIMIT,
     )
 
     standalone = _load_standalone_audit()
@@ -189,20 +190,24 @@ def test_channel_classifier_constants_parity():
     )
     assert standalone.TIER2_WEIGHTS == MODULAR_TIER2_WEIGHTS, (
         "TIER2_WEIGHTS drift. Weight changes silently shift the score "
-        "boundary at which a channel wins; mirror into both."
+        "boundary at which a channel wins; regenerate audit.py."
     )
     assert standalone.TIER2_PRIORITY == MODULAR_TIER2_PRIORITY, (
         "TIER2_PRIORITY drift. The tie-break order determines the "
-        "winner when two channels score equally; mirror into both."
+        "winner when two channels score equally; regenerate audit.py."
     )
     assert standalone.TIER3_RELAY_ID_PATTERN.pattern == MODULAR_TIER3_PATTERN.pattern, (
         "TIER3_RELAY_ID_PATTERN drift between channel_classifier.py and "
         "standalone audit.py. Pattern controls the transparent-relay "
-        "inference; mirror exactly."
+        "inference; regenerate audit.py."
     )
     assert standalone.TIER3_RELAY_CONFIDENCE == MODULAR_TIER3_CONFIDENCE, (
         "TIER3_RELAY_CONFIDENCE drift. The 0.5 confidence is the user-"
         "visible signal strength of the relay-proxy inference."
+    )
+    assert standalone._CHANNEL_BODY_SCAN_LIMIT == MODULAR_CHANNEL_BODY_LIMIT, (
+        "_CHANNEL_BODY_SCAN_LIMIT drift between channel_classifier.py and "
+        "standalone audit.py."
     )
 
 

@@ -922,10 +922,11 @@ future contributors don't re-consider them without new information.
 
 When adding any new feature, verify these hold before committing:
 
-1. **Dual-distribution parity** — `test_risk_matrix_character_identical`
-   must stay green. Any risk matrix change must be mirrored byte-for-byte
-   into `audit.py` standalone. Add parity tests for any new shared
-   constants (see `TestWeb3MarkerParity` as an example).
+1. **Generated dual distribution** — `python3 scripts/build-standalone.py
+   --check` and `tests/test_dual_distribution_parity.py` must stay green.
+   Any change to portable audit semantics belongs in modular source, then
+   root `audit.py` must be regenerated. Add focused behavior or constant
+   regression tests for new shared semantics.
 2. **Zero-dependency standalone** — `audit.py` must run on vanilla
    Python 3.7+ with only `curl` available. No new pip dependencies in
    the standalone distribution. New third-party libs go in
