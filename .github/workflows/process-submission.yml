@@ -1,0 +1,130 @@
+name: Process Audit Submission
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: process-submission
+  cancel-in-progress: false
+
+jobs:
+  process:
+    if: github.event.label.name == 'audit-submission'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync latest master
+        run: git pull --ff-only origin master
+
+      - name: Get author account age
+        id: author
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const user = await github.rest.users.getByUsername({
+              username: context.payload.issue.user.login
+            });
+            core.setOutput('created_at', user.data.created_at);
+
+      - name: Run submission processor
+        id: process
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          AUTHOR_CREATED_AT: ${{ steps.author.outputs.created_at }}
+        run: python3 scripts/process_submission.py
+        continue-on-error: true
+
+      - name: Fail on processor error
+        if: steps.process.outputs.status == 'ERROR' || steps.process.outputs.status == ''
+        run: exit 1
+
+      - name: Label needs-review
+        if: steps.process.outputs.status == 'NEEDS_REVIEW'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['needs-review']
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: '⚠️ Auto-check: GitHub account is less than 30 days old. This submission requires manual review.\n\n⚠️ 自动检查：GitHub 账号注册不满 30 天，需人工审核。'
+            });
+
+      - name: Label rate-limited
+        if: steps.process.outputs.status == 'RATE_LIMITED'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['rate-limited']
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: '⚠️ Rate limit: this relay has too many submissions in the last 24 hours. Please wait.\n\n⚠️ 频率限制：该中转站 24 小时内提交过多，请稍后再试。'
+            });
+
+      - name: Comment validation errors
+        if: steps.process.outputs.status == 'VALIDATION_ERRORS'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: '❌ Submission has validation errors. Please check the required fields and resubmit.\n\n❌ 提交存在验证错误，请检查必填字段后重新提交。'
+            });
+
+      - name: Commit and push
+        if: steps.process.outputs.status == 'OK'
+        env:
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add web/data/relays.json
+          if git diff --cached --quiet; then
+            echo "No relay data changes to commit."
+            exit 0
+          fi
+          git commit -m "Add community audit: ${ISSUE_AUTHOR} (#${ISSUE_NUMBER})"
+          git push origin HEAD:master
+
+      - name: Comment success
+        if: steps.process.outputs.status == 'OK'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: '✅ Audit submission processed and added to the leaderboard. Thank you!\n\n✅ 审计提交已处理并添加到排行榜，感谢贡献！'
+            });
