@@ -6,7 +6,7 @@ item has a short rationale so future contributors (including future
 iterations of the author) can quickly reconstruct why a thing is or is not
 on the list.
 
-**Last updated**: 2026-05-03 (cctest.ai 复查衍生 v1.9 候选项追加，§2.6；ROADMAP-only，无代码改动，562/562 仍 passing)
+**Last updated**: 2026-05-29 (OpenRouter Claude Opus 4.8 identity anomaly follow-up: Step 5 self-ID wording downgraded to consistency signal, 586/586 passing)
 
 **Threat model anchor**: Liu et al., *Your Agent Is Mine: Measuring
 Malicious Intermediary Attacks on the LLM Supply Chain*, arXiv:2604.08407.
@@ -195,6 +195,24 @@ and deferred the other two to v1.9.
   fails with `SystemExit(2)` proving the wiring inside `scripts/
   audit.py` AND the standalone argparse actually uses the validator.
 - **Final test count**: 562/562 passing (560 → 562, +2 this round).
+
+### v1.8.2 Identity consistency wording (shipped 2026-05-29)
+OpenRouter Claude Opus 4.8 internal report from 2026-05-29 showed a
+concrete contradiction: response metadata reported `provider: Anthropic`
+and `model: anthropic/claude-4.8-opus-20260528`, while natural-language
+answers to "what model are you" self-identified as Qwen/DeepSeek in 4 of
+6 calls. That evidence changes Step 5's attribution semantics.
+- **Design correction**: natural-language self-ID is not ground truth for
+  the actual upstream model. It is only a consistency signal that must be
+  interpreted alongside full response JSON, request id, provider/model
+  metadata, and platform logs.
+- **Product change**: Step 5 still flags non-Claude self-ID under the D2
+  instruction-override dimension, but the report no longer phrases it as
+  proof that the actual upstream model was replaced.
+- **Regression tests**: OpenRouter-shaped Anthropic metadata + Qwen and
+  DeepSeek self-ID cases are pinned for both modular and standalone
+  distributions.
+- **Final test count**: 586/586 passing (+4 OpenRouter identity consistency cases this round).
 
 ---
 

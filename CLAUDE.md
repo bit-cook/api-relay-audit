@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Security audit tool for third-party AI API relay/proxy services. Detects hidden prompt injection, prompt leakage, instruction override with non-Claude identity substitution, context truncation, tool-call package substitution (AC-1.a), error response header leakage (AC-2 adjacent), SSE-level stream integrity anomalies (AC-1 SSE-layer), Web3 prompt injection (SlowMist signature isolation, profile-gated), relay-framework fingerprinting, and latency-variance fingerprinting.
+Security audit tool for third-party AI API relay/proxy services. Detects hidden prompt injection, prompt leakage, instruction override with non-Claude natural-language identity inconsistency, context truncation, tool-call package substitution (AC-1.a), error response header leakage (AC-2 adjacent), SSE-level stream integrity anomalies (AC-1 SSE-layer), Web3 prompt injection (SlowMist signature isolation, profile-gated), relay-framework fingerprinting, and latency-variance fingerprinting.
 
 Threat taxonomy follows Liu et al., *Your Agent Is Mine*, arXiv:2604.08407 — AC-1 (payload injection), AC-1.a (dependency-targeted injection), AC-1.b (conditional delivery), AC-2 (secret exfiltration). Infrastructure fingerprint (Step 12) and latency variance (Step 13) are sourced from Zhang et al., *Real Money, Fake Models*, arXiv:2603.01919. AC-1 full tool_call support and AC-1.b beyond warm-up mitigation remain on the backlog (see FOR_JOHN.md).
 
@@ -78,13 +78,13 @@ When making changes to audit logic, `audit.py` (root) must be updated to stay in
 - `api_relay_audit/reporter.py` — Builder-pattern Markdown report. `flag(level, msg)` appends to both body and risk summary.
 - `api_relay_audit/tool_substitution.py` — AC-1.a via text-echo of pinned package commands (`pip install requests==2.31.0`, etc.). Text surrogate only: does NOT catch rewrites targeting structured `tool_call` payloads.
 - `api_relay_audit/error_leakage.py` — AC-2 adjacent. 7-8 deterministic broken requests (malformed JSON, invalid model, wrong content-type, missing fields, unknown endpoint, `max_tokens=99999999` force-upstream, fake Bearer auth probe). Three scan paths: literal key match, LiteLLM-ported regex, LiteLLM issue-sourced markers (#5762, #8075, #12152, #13705, #15799, #20419).
-- `api_relay_audit/identity_patterns.py` — 26 non-Claude keywords. ASCII uses word-bounded regex (`Qwen2.5` matches, `laws` doesn't); CJK uses substring.
+- `api_relay_audit/identity_patterns.py` — 26 non-Claude keywords. ASCII uses word-bounded regex (`Qwen2.5` matches, `laws` doesn't); CJK uses substring. Step 5 treats hits as natural-language identity consistency anomalies, not proof of the actual upstream model; attribution needs full response JSON, request id, provider/model metadata, and platform logs.
 - `api_relay_audit/stream_integrity.py` — SSE whitelist + usage monotonicity + thinking signature + stream model identity check. Tri-state verdict (`clean`/`anomaly`/`inconclusive`). Clean-room reimplementation of hvoy.ai concept, not a port.
 - `api_relay_audit/transparent_log.py` — Append-only JSONL forensic log. Hash-only (no body), entries ≤1.5 KB. Hooks into all 4 `APIClient` public methods (`call`, `get_models`, `raw_request`, `stream_call`).
 - `api_relay_audit/web3/injection_probes.py` — 3 SlowMist-derived probes; safe-priority aggregation with `HARD_INJECTED_MARKERS` override for contradictory responses. Profile-gated (`--profile web3|full`).
 - `api_relay_audit/infra_fingerprint.py` — 3 unauthenticated GET probes; signature DB covers 7 frameworks; majority vote → `confirmed`/`tentative`/`unknown`. Informational only, does not feed the risk matrix.
 - `api_relay_audit/latency_variance.py` — N identical `max_tokens=8` requests timed with `time.perf_counter` (not `time.time` — monotonicity, v1.8.1 fix). `ensure_format()` is called before the timing loop to prevent the first sample silently including a failed Anthropic probe. Bimodality is the strong signal for silent A/B model substitution. Informational only.
-- `scripts/audit.py` — 13-step orchestration. **6D risk matrix**: D1=token injection, D2=instruction override, D3=tool-call substitution, D4=error leakage, D5=stream anomaly, D6=Web3 injection (profile-gated). Steps 12/13 informational only. `--profile` gates step set at runtime — rejected branch-forking to preserve the dual-distribution invariant.
+- `scripts/audit.py` — 13-step orchestration. **6D risk matrix**: D1=token injection, D2=instruction override / identity consistency anomaly, D3=tool-call substitution, D4=error leakage, D5=stream anomaly, D6=Web3 injection (profile-gated). Steps 12/13 informational only. `--profile` gates step set at runtime — rejected branch-forking to preserve the dual-distribution invariant.
 
 ### APIClient Return Format
 ```python

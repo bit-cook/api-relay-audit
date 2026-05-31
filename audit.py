@@ -2489,6 +2489,17 @@ def _is_self_corrected_hidden_prompt_echo(test_name, text_lower, structural, str
     )
 
 
+def _format_identity_inconsistency(non_claude_matches):
+    """Render Step 5's non-Claude self-ID finding without over-attribution."""
+    matches = ", ".join(non_claude_matches)
+    return (
+        "Natural-language identity inconsistency: response self-identifies "
+        f"as non-Claude ({matches}). This is a consistency signal, not proof "
+        "of the actual upstream model; preserve the full response JSON, "
+        "request id, provider/model metadata, and platform logs for attribution."
+    )
+
+
 def test_prompt_extraction(client, report):
     report.h2("4. Prompt Extraction Tests")
 
@@ -2637,14 +2648,16 @@ def test_instruction_conflict(client, report):
         report.code(r["text"][:500])
         text_lower = r["text"].lower()
         # v1.6: broader non-Claude identity detection (Chinese-market
-        # substitutes + Chinese brand names), inspired by hvoy.ai.
+        # substitutes + Chinese brand names), inspired by hvoy.ai. This is
+        # an identity-consistency signal only: natural-language self-ID can
+        # contradict provider/model metadata and is not ground truth for
+        # the actual upstream route.
         non_claude_matches = find_non_claude_identities(r["text"])
         if non_claude_matches:
             overridden = True
             report.flag(
                 "red",
-                "Identity test failed: model claims non-Claude identity "
-                f"({', '.join(non_claude_matches)})",
+                _format_identity_inconsistency(non_claude_matches),
             )
         elif "anthropic" in text_lower and "claude" in text_lower:
             report.flag("green", "Identity test passed: model correctly identifies as user-defined identity")

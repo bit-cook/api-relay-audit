@@ -239,6 +239,17 @@ def _is_self_corrected_hidden_prompt_echo(test_name, text_lower, structural, str
     )
 
 
+def _format_identity_inconsistency(non_claude_matches):
+    """Render Step 5's non-Claude self-ID finding without over-attribution."""
+    matches = ", ".join(non_claude_matches)
+    return (
+        "Natural-language identity inconsistency: response self-identifies "
+        f"as non-Claude ({matches}). This is a consistency signal, not proof "
+        "of the actual upstream model; preserve the full response JSON, "
+        "request id, provider/model metadata, and platform logs for attribution."
+    )
+
+
 # ============================================================
 # CLI
 # ============================================================
@@ -572,14 +583,16 @@ def test_instruction_conflict(client, report):
         # identity_patterns module. Catches Chinese-market substitutes
         # (GLM / DeepSeek / Qwen / MiniMax / Grok / GPT / ERNIE /
         # Doubao / Moonshot / 通义 / 千问 / 智谱 / 豆包 / 文心) in
-        # addition to the legacy Amazon / Kiro / AWS set.
+        # addition to the legacy Amazon / Kiro / AWS set. This remains
+        # an identity-consistency signal only: natural-language self-ID
+        # can contradict provider/model metadata and is not ground truth
+        # for the actual upstream route.
         non_claude_matches = find_non_claude_identities(r["text"])
         if non_claude_matches:
             overridden = True
             report.flag(
                 "red",
-                "Identity test failed: model claims non-Claude identity "
-                f"({', '.join(non_claude_matches)})",
+                _format_identity_inconsistency(non_claude_matches),
             )
         elif "anthropic" in text_lower and "claude" in text_lower:
             report.flag("green", "Identity test passed: model correctly identifies as user-defined identity")
