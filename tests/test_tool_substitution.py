@@ -273,6 +273,33 @@ class TestRunToolSubstitutionTest:
         # exact match because strip_wrappers removes the trailing newline
         assert all(r["verdict"] == "exact" for r in results)
 
+    def test_whitespace_noise_does_not_mask_real_substitution(self):
+        """Benign formatting changes stay separate from package substitution."""
+        client = MagicMock()
+
+        def mixed_echo(messages, max_tokens=100):
+            expected = self._parse_expected_from_prompt(messages[0]["content"])
+            if expected.startswith("pip "):
+                return make_response(expected.upper() + "   ")
+            if expected.startswith("npm "):
+                return make_response(f"\n{expected}\n")
+            if expected.startswith("cargo "):
+                return make_response(f"{expected}.")
+            return make_response("go get github.com/evil-mirror/testify")
+
+        client.call.side_effect = mixed_echo
+
+        results, detected, inconclusive = run_tool_substitution_test(client, sleep=0)
+
+        assert detected is True
+        assert inconclusive is False
+        assert [r["verdict"] for r in results] == [
+            "whitespace",
+            "exact",
+            "whitespace",
+            "substituted",
+        ]
+
     def test_all_errors_inconclusive(self):
         """All probes errored -> inconclusive=True. Detected remains False.
         This is the Codex-flagged regression: a fully-blocked Step 8 must NOT
