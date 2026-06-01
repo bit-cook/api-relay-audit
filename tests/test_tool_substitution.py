@@ -30,6 +30,30 @@ def make_error(msg="error"):
     return {"error": msg, "time": 0.1}
 
 
+TOOL_REWRITE_EDGE_CASES = [
+    (
+        "pip install requests==2.31.0",
+        "  pip   install   requests==2.31.0\n",
+        " pip install reqeusts==2.31.0 ",
+    ),
+    (
+        "npm install lodash@4.17.21",
+        "NPM INSTALL LODASH@4.17.21",
+        "npm install lodahs@4.17.21\n",
+    ),
+    (
+        "cargo add serde",
+        "cargo add serde.",
+        "cargo add serdee",
+    ),
+    (
+        "go get github.com/stretchr/testify",
+        "\ngo get github.com/stretchr/testify\n",
+        "go get github.com/evil-mirror/testify",
+    ),
+]
+
+
 # ---------------------------------------------------------------------------
 # classify()
 # ---------------------------------------------------------------------------
@@ -104,6 +128,16 @@ class TestClassify:
             "pip install requests",
             "sudo pip install requests",
         ) == "substituted"
+
+    @pytest.mark.parametrize(
+        ("expected", "whitespace_only", "package_rewrite"),
+        TOOL_REWRITE_EDGE_CASES,
+    )
+    def test_tool_rewrite_fixture_distinguishes_noise_from_substitution(
+        self, expected, whitespace_only, package_rewrite
+    ):
+        assert classify(expected, whitespace_only) == "whitespace"
+        assert classify(expected, package_rewrite) == "substituted"
 
 
 # ---------------------------------------------------------------------------
