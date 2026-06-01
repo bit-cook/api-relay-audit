@@ -120,7 +120,7 @@ TIER3_RELAY_CONFIDENCE = 0.5
 # Body scan cap. Anthropic message responses are typically <2 KB but tool-use
 # or large outputs can balloon; we only need enough to catch the
 # `anthropic_version` field which is always near the top of the JSON.
-_BODY_SCAN_LIMIT = 8192
+_CHANNEL_BODY_SCAN_LIMIT = 8192
 
 
 def _signal_fires(signal_type, signal_value, headers_lower, message_id, body_truncated):
@@ -128,7 +128,7 @@ def _signal_fires(signal_type, signal_value, headers_lower, message_id, body_tru
 
     All inputs are pre-normalized: headers_lower is a lowercased name->value
     dict, message_id is a string (possibly empty), body_truncated is a
-    string truncated to _BODY_SCAN_LIMIT.
+    string truncated to _CHANNEL_BODY_SCAN_LIMIT.
     """
     if signal_type == "id_prefix":
         return bool(message_id) and message_id.startswith(signal_value)
@@ -187,7 +187,7 @@ def classify_channel(headers, message_id, raw_body):
         headers = {}
     headers_lower = {str(k).lower(): str(v) for k, v in headers.items()}
     message_id = message_id or ""
-    body_truncated = (raw_body or "")[:_BODY_SCAN_LIMIT]
+    body_truncated = (raw_body or "")[:_CHANNEL_BODY_SCAN_LIMIT]
 
     # Tier 1: first match returns immediately.
     for label, signal_type, signal_value in TIER1_RULES:

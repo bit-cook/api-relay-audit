@@ -61,7 +61,7 @@ from api_relay_audit.refusal import (
 from api_relay_audit.reporter import Reporter
 from api_relay_audit.stream_integrity import analyze_stream
 from api_relay_audit.tool_substitution import run_tool_substitution_test
-from api_relay_audit.web3 import run_web3_injection_probes
+from api_relay_audit.web3.injection_probes import run_web3_injection_probes
 
 
 def _format_identity_inconsistency(non_claude_matches):

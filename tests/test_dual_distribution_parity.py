@@ -1,15 +1,17 @@
-"""Dual-distribution invariant regression test.
+"""Dual-distribution invariant regression tests.
 
 The repo ships two parallel versions of the audit tool:
 
     - ``scripts/audit.py`` (modular, uses ``api_relay_audit/*.py``)
     - ``audit.py`` at repo root (standalone, zero-dep, curl-only)
 
-Any change to one must be mirrored into the other. This test slices the
-risk-matrix block from both files and asserts they are character-identical
-so that drift is caught immediately.
+The root ``audit.py`` is a generated artifact. The primary invariant is
+therefore no longer "hand-edit two files identically"; it is "the committed
+artifact must be exactly what scripts/build-standalone.py generates", plus
+focused behavior/constant regression tests for public standalone semantics.
 """
 
+import ast
 import sys
 import re
 import subprocess
@@ -22,33 +24,35 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _extract_risk_matrix(path: Path) -> str:
-    """Slice the risk-matrix block between the ``# Overall rating`` comment
-    and the following ``# Output`` comment. Both files MUST contain both
-    markers, otherwise the test is broken and should fail loudly.
-    """
-    text = path.read_text(encoding="utf-8")
-    start_marker = "    # Overall rating\n"
-    end_marker = "    # Output\n"
-    start = text.find(start_marker)
-    end = text.find(end_marker, start)
-    if start == -1:
-        raise AssertionError(f"Could not find '# Overall rating' marker in {path}")
-    if end == -1:
-        raise AssertionError(f"Could not find '# Output' marker in {path}")
-    return text[start:end]
+def test_standalone_artifact_generated_from_sources():
+    """The committed root audit.py must be exactly generator output."""
+    subprocess.run(
+        [sys.executable, "scripts/build-standalone.py", "--check"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
 
 
-def test_risk_matrix_character_identical():
-    """Regression: the risk matrix code in scripts/audit.py and audit.py MUST
-    be character-identical. If this test fails, one of the two was updated
-    without the other and the dual-distribution invariant is broken.
-    """
-    modular = _extract_risk_matrix(REPO_ROOT / "scripts" / "audit.py")
-    standalone = _extract_risk_matrix(REPO_ROOT / "audit.py")
-    assert modular == standalone, (
-        "Risk matrix drift between scripts/audit.py and audit.py. "
-        "Update both files so they are character-identical."
+def test_standalone_has_no_package_or_httpx_runtime_imports():
+    """curl-download users must not need api_relay_audit/ or httpx installed."""
+    tree = ast.parse((REPO_ROOT / "audit.py").read_text(encoding="utf-8"))
+    forbidden = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "httpx" or alias.name.startswith("api_relay_audit"):
+                    forbidden.append((node.lineno, alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == "httpx" or module.startswith("api_relay_audit"):
+                forbidden.append((node.lineno, module))
+
+    assert not forbidden, (
+        "Generated standalone audit.py must not import modular package "
+        f"or httpx at runtime; found {forbidden}"
     )
 
 
@@ -84,11 +88,11 @@ def test_identity_keywords_standalone_parity():
 
     assert standalone.NON_CLAUDE_IDENTITY_KEYWORDS == MODULAR_KEYWORDS, (
         "Identity keyword tuple drift between api_relay_audit/identity_patterns.py "
-        "and standalone audit.py. Mirror the change into both."
+        "and standalone audit.py. Update modular source and regenerate audit.py."
     )
     assert standalone._NON_CLAUDE_STRICT_KEYWORDS == MODULAR_STRICT, (
         "Strict-keyword frozenset drift between identity_patterns.py and "
-        "standalone audit.py. Mirror the change into both."
+        "standalone audit.py. Update modular source and regenerate audit.py."
     )
 
 
@@ -148,7 +152,7 @@ def test_infra_fingerprint_constants_parity():
 
     assert standalone.FRAMEWORK_SIGNATURES == MODULAR_SIGS, (
         "FRAMEWORK_SIGNATURES drift between api_relay_audit/infra_fingerprint.py "
-        "and standalone audit.py. Mirror the change into both -- signal order "
+        "and standalone audit.py. Regenerate audit.py -- signal order "
         "matters (specific frameworks before generic ones)."
     )
     assert standalone.INFORMATIVE_HEADERS == MODULAR_HEADERS, (
@@ -175,6 +179,7 @@ def test_channel_classifier_constants_parity():
         TIER2_WEIGHTS as MODULAR_TIER2_WEIGHTS,
         TIER3_RELAY_CONFIDENCE as MODULAR_TIER3_CONFIDENCE,
         TIER3_RELAY_ID_PATTERN as MODULAR_TIER3_PATTERN,
+        _CHANNEL_BODY_SCAN_LIMIT as MODULAR_CHANNEL_BODY_LIMIT,
     )
 
     standalone = _load_standalone_audit()
@@ -185,20 +190,24 @@ def test_channel_classifier_constants_parity():
     )
     assert standalone.TIER2_WEIGHTS == MODULAR_TIER2_WEIGHTS, (
         "TIER2_WEIGHTS drift. Weight changes silently shift the score "
-        "boundary at which a channel wins; mirror into both."
+        "boundary at which a channel wins; regenerate audit.py."
     )
     assert standalone.TIER2_PRIORITY == MODULAR_TIER2_PRIORITY, (
         "TIER2_PRIORITY drift. The tie-break order determines the "
-        "winner when two channels score equally; mirror into both."
+        "winner when two channels score equally; regenerate audit.py."
     )
     assert standalone.TIER3_RELAY_ID_PATTERN.pattern == MODULAR_TIER3_PATTERN.pattern, (
         "TIER3_RELAY_ID_PATTERN drift between channel_classifier.py and "
         "standalone audit.py. Pattern controls the transparent-relay "
-        "inference; mirror exactly."
+        "inference; regenerate audit.py."
     )
     assert standalone.TIER3_RELAY_CONFIDENCE == MODULAR_TIER3_CONFIDENCE, (
         "TIER3_RELAY_CONFIDENCE drift. The 0.5 confidence is the user-"
         "visible signal strength of the relay-proxy inference."
+    )
+    assert standalone._CHANNEL_BODY_SCAN_LIMIT == MODULAR_CHANNEL_BODY_LIMIT, (
+        "_CHANNEL_BODY_SCAN_LIMIT drift between channel_classifier.py and "
+        "standalone audit.py."
     )
 
 
@@ -418,6 +427,144 @@ def test_public_help_flags_parity():
     modular_flags = _help_option_set(REPO_ROOT / "scripts" / "audit.py")
     standalone_flags = _help_option_set(REPO_ROOT / "audit.py")
     assert modular_flags == standalone_flags
+
+
+def _extract_overall_rating(markdown):
+    match = re.search(r"### (HIGH|MEDIUM|LOW) RISK", markdown)
+    assert match, f"Could not find overall rating in report:\n{markdown[-1000:]}"
+    return match.group(1)
+
+
+def _run_stubbed_audit_and_rating(module, monkeypatch, tmp_path, case_name, scenario):
+    class FakeClient:
+        base_url = "https://relay.example.com"
+        model = "claude-test"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def set_transparent_logger(self, logger):
+            pass
+
+    monkeypatch.setattr(module, "APIClient", FakeClient)
+    monkeypatch.setattr(module, "run_warmup", lambda client, count: None)
+    monkeypatch.setattr(module, "test_infrastructure", lambda *args: None)
+    monkeypatch.setattr(module, "test_models", lambda *args: None)
+    monkeypatch.setattr(module, "test_prompt_extraction", lambda *args: False)
+    monkeypatch.setattr(module, "test_jailbreak", lambda *args: None)
+    monkeypatch.setattr(module, "test_context_length", lambda *args: None)
+    monkeypatch.setattr(module, "test_infra_fingerprint", lambda *args: None)
+    monkeypatch.setattr(module, "test_latency_variance", lambda *args: None)
+    monkeypatch.setattr(module, "test_channel_classifier", lambda *args: None)
+
+    if scenario.get("crash_step"):
+        def crash(*args):
+            raise RuntimeError("synthetic step crash")
+
+        monkeypatch.setattr(module, scenario["crash_step"], crash)
+
+    monkeypatch.setattr(
+        module,
+        "test_token_injection",
+        lambda *args: scenario.get("injection", 0),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_instruction_conflict",
+        lambda *args: scenario.get("overridden", False),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_tool_substitution",
+        lambda *args: (
+            scenario.get("substitution_detected", False),
+            scenario.get("substitution_inconclusive", False),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_error_leakage",
+        lambda *args: (
+            scenario.get("error_severity", "none"),
+            scenario.get("error_inconclusive", False),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_stream_integrity",
+        lambda *args: (
+            scenario.get("stream_verdict", "clean"),
+            scenario.get("stream_inconclusive", False),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_web3_injection",
+        lambda *args: (
+            scenario.get("web3_verdict", "clean"),
+            scenario.get("web3_inconclusive", False),
+        ),
+    )
+
+    output = tmp_path / f"{module.__name__.replace('.', '_')}-{case_name}.md"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit.py",
+            "--key",
+            "sk-test",
+            "--url",
+            "https://relay.example.com/v1",
+            "--model",
+            "claude-test",
+            "--profile",
+            "full",
+            "--output",
+            str(output),
+        ],
+    )
+
+    module.main()
+    return _extract_overall_rating(output.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("case_name", "scenario", "expected"),
+    [
+        ("clean", {}, "LOW"),
+        ("d1_only", {"injection": 101}, "MEDIUM"),
+        ("d1_and_d2", {"injection": 101, "overridden": True}, "HIGH"),
+        ("d3_substitution", {"substitution_detected": True}, "HIGH"),
+        ("d4_medium", {"error_severity": "medium"}, "MEDIUM"),
+        ("d4_high", {"error_severity": "high"}, "HIGH"),
+        ("d5_anomaly", {"stream_verdict": "anomaly"}, "HIGH"),
+        ("d6_inconclusive", {"web3_inconclusive": True}, "MEDIUM"),
+        ("step_crash", {"crash_step": "test_models"}, "MEDIUM"),
+    ],
+)
+def test_overall_risk_matrix_semantic_parity(monkeypatch, tmp_path, case_name, scenario, expected):
+    """The generated standalone and modular entrypoints must make the same
+    user-visible risk decision for representative D1-D6 matrix paths.
+
+    The generated-artifact check prevents textual drift, but this semantic
+    smoke test keeps the important public behavior pinned without restoring
+    the old brittle byte-level risk-matrix block parity.
+    """
+    import scripts.audit as modular
+
+    standalone = _load_standalone_audit()
+
+    modular_rating = _run_stubbed_audit_and_rating(
+        modular, monkeypatch, tmp_path, f"modular-{case_name}", scenario,
+    )
+    standalone_rating = _run_stubbed_audit_and_rating(
+        standalone, monkeypatch, tmp_path, f"standalone-{case_name}", scenario,
+    )
+
+    assert modular_rating == expected
+    assert standalone_rating == expected
+    assert standalone_rating == modular_rating
 
 
 def test_standalone_transparent_log_call_writes_entry(tmp_path, monkeypatch):
