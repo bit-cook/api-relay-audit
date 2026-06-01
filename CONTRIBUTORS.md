@@ -12,6 +12,10 @@ arrives as a direct pull request.
   a downstream fork that contributed the Windows long-context stability
   finding and the opt-in fast context scan idea tracked in
   [issue #14](https://github.com/toby-bridges/api-relay-audit/issues/14).
+- [@shivam2931120](https://github.com/shivam2931120) — contributed the
+  deterministic Step 8 tool-substitution edge fixture in
+  [PR #44](https://github.com/toby-bridges/api-relay-audit/pull/44), covering
+  benign formatting noise alongside a real package substitution.
 
 ## Attribution Policy
 
