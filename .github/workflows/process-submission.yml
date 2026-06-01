@@ -2,7 +2,7 @@ name: Process Audit Evidence Submission
 
 on:
   issues:
-    types: [labeled]
+    types: [opened, labeled]
 
 permissions:
   contents: write
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   process:
-    if: github.event.label.name == 'audit-submission'
+    if: contains(github.event.issue.labels.*.name, 'audit-submission')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,6 +68,16 @@ jobs:
             });
             core.setOutput('created_at', user.data.created_at);
 
+      - name: Collect pending evidence PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr list \
+            --state open \
+            --base master \
+            --json headRefName,createdAt,isCrossRepository \
+            > /tmp/pending-evidence-prs.json
+
       - name: Run submission processor
         id: process
         env:
@@ -75,6 +85,7 @@ jobs:
           ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           AUTHOR_CREATED_AT: ${{ steps.author.outputs.created_at }}
+          PENDING_EVIDENCE_PRS_FILE: /tmp/pending-evidence-prs.json
         run: python3 scripts/process_submission.py
         continue-on-error: true
 
@@ -161,7 +172,7 @@ jobs:
           TOOL_COMMIT: ${{ steps.process.outputs.tool_commit }}
         run: |
           set -euo pipefail
-          BRANCH="community/evidence-issue-${ISSUE_NUMBER}"
+          BRANCH="community/evidence-${RELAY_DOMAIN}-issue-${ISSUE_NUMBER}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git switch -c "${BRANCH}"

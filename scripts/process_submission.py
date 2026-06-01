@@ -16,6 +16,7 @@ Environment variables (set by the Action):
   ISSUE_AUTHOR      -- GitHub username of the submitter
   ISSUE_NUMBER      -- issue number
   AUTHOR_CREATED_AT -- ISO timestamp of the author's GitHub account creation
+  PENDING_EVIDENCE_PRS_FILE -- optional gh-pr-list JSON for open evidence PRs
   GITHUB_OUTPUT     -- path to output file (set by GitHub Actions runtime)
 """
 
@@ -41,6 +42,7 @@ TOOL_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 REPORT_HASH_RE = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{64}$")
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]\r\n]*\]\((https://[^\s)]+)\)")
 HTTPS_URL_RE = re.compile(r"https://[^\s<>)]+")
+PENDING_EVIDENCE_BRANCH_RE = re.compile(r"^community/evidence-(?P<domain>[^/]+)-issue-\d+$")
 
 
 def _set_output(key, value):
@@ -220,6 +222,33 @@ def check_rate_limit(domain, evidence_data):
     return count >= MAX_SUBMISSIONS_PER_RELAY_24H
 
 
+def load_pending_evidence_pr_entries(path):
+    """Load open evidence PR branch metadata as rate-limit entries."""
+    if not path:
+        return []
+    try:
+        items = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        print(f"WARNING: could not load pending evidence PRs: {exc}")
+        return []
+
+    entries = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("isCrossRepository"):
+            continue
+        match = PENDING_EVIDENCE_BRANCH_RE.fullmatch(item.get("headRefName", ""))
+        if not match:
+            continue
+        domain = normalize_domain(match.group("domain"))
+        created_at = item.get("createdAt", "")
+        if not created_at or not is_valid_hostname(domain):
+            continue
+        entries.append({"relayDomain": domain, "submittedAt": created_at})
+    return entries
+
+
 def extract_image_urls(text):
     """Extract strict HTTPS image URLs from markdown image syntax."""
     urls = []
@@ -311,9 +340,12 @@ def main():
         evidence_data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
     else:
         evidence_data = []
+    pending_evidence_data = load_pending_evidence_pr_entries(
+        os.environ.get("PENDING_EVIDENCE_PRS_FILE", "")
+    )
 
     domain = normalize_domain(fields["relay_domain"])
-    if check_rate_limit(domain, evidence_data):
+    if check_rate_limit(domain, evidence_data + pending_evidence_data):
         print(f"RATE_LIMITED: {domain} has >= {MAX_SUBMISSIONS_PER_RELAY_24H} submissions in 24h")
         _set_output("status", "RATE_LIMITED")
         sys.exit(4)

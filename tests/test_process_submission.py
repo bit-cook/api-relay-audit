@@ -12,6 +12,7 @@ from process_submission import (  # noqa: E402
     check_rate_limit,
     extract_artifact_url,
     extract_image_urls,
+    load_pending_evidence_pr_entries,
     normalize_report_hash,
     parse_issue_body,
     validate_fields,
@@ -425,6 +426,47 @@ def test_rate_limit_accepts_legacy_domain_key():
     now_iso = datetime.now(timezone.utc).isoformat()
     fake_data = [{"domain": "TEST.com.", "submittedAt": now_iso} for _ in range(10)]
     assert check_rate_limit("test.com", fake_data) is True
+
+
+def test_pending_evidence_prs_count_toward_rate_limit(tmp_path):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    pending_prs = [
+        {
+            "headRefName": f"community/evidence-test.com-issue-{i}",
+            "createdAt": now_iso,
+        }
+        for i in range(10)
+    ]
+    pending_file = tmp_path / "pending-prs.json"
+    pending_file.write_text(json.dumps(pending_prs), encoding="utf-8")
+
+    entries = load_pending_evidence_pr_entries(str(pending_file))
+
+    assert len(entries) == 10
+    assert check_rate_limit("test.com", entries) is True
+
+
+def test_pending_evidence_pr_parser_ignores_unrelated_branches(tmp_path):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    pending_prs = [
+        {"headRefName": "community/evidence-other.com-issue-1", "createdAt": now_iso},
+        {"headRefName": "community/evidence-issue-2", "createdAt": now_iso},
+        {"headRefName": "community/evidence-bad_domain.com-issue-3", "createdAt": now_iso},
+        {"headRefName": "feature/test", "createdAt": now_iso},
+        {"headRefName": "community/evidence-test.com-issue-4", "createdAt": ""},
+        {
+            "headRefName": "community/evidence-test.com-issue-5",
+            "createdAt": now_iso,
+            "isCrossRepository": True,
+        },
+    ]
+    pending_file = tmp_path / "pending-prs.json"
+    pending_file.write_text(json.dumps(pending_prs), encoding="utf-8")
+
+    entries = load_pending_evidence_pr_entries(str(pending_file))
+
+    assert entries == [{"relayDomain": "other.com", "submittedAt": now_iso}]
+    assert check_rate_limit("test.com", entries) is False
 
 
 def test_main_creates_evidence_json(tmp_path, monkeypatch):
