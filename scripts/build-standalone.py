@@ -5,6 +5,8 @@ Phase 3 makes the root ``audit.py`` a generated first-class distribution
 artifact. The modular sources remain the source of truth for detection
 semantics; this builder inlines those stdlib-compatible modules and rewrites
 the client transport surface so the standalone artifact stays curl-only.
+
+Developer prerequisite: run this builder with Python 3.10+ (CI uses 3.11).
 """
 
 from __future__ import annotations
@@ -254,13 +256,29 @@ def drop_top_level_defs(text: str, names: set[str]) -> str:
     )
 
 
-def replace_method_block(text: str, start: str, end: str, replacement: str) -> str:
+def replace_method_block(
+    text: str,
+    start: str,
+    end: str,
+    replacement: str,
+    label: str = "method block",
+) -> str:
     start_idx = text.find(start)
     if start_idx == -1:
-        raise SystemExit(f"Could not find method block start: {start!r}")
+        raise SystemExit(
+            "Standalone generation transform failed while replacing "
+            f"{label}: could not find start sentinel {start!r}. "
+            "If the modular source changed shape, update "
+            "scripts/build-standalone.py's transform for that source."
+        )
     end_idx = text.find(end, start_idx)
     if end_idx == -1:
-        raise SystemExit(f"Could not find method block end after: {start!r}")
+        raise SystemExit(
+            "Standalone generation transform failed while replacing "
+            f"{label}: found start sentinel {start!r} but could not find "
+            f"end sentinel {end!r}. If the modular source changed shape, "
+            "update scripts/build-standalone.py's transform for that source."
+        )
     return text[:start_idx] + replacement + "\n\n" + text[end_idx:]
 
 
@@ -284,6 +302,7 @@ def transform_client(text: str) -> str:
                           hasher=None) -> None:
         """Standalone build: modular httpx streaming is replaced by curl."""
         self._stream_via_curl(url, headers, body, timeout, signals, hasher)''',
+        label="api_relay_audit/client.py APIClient._stream_via_httpx",
     )
     return text
 

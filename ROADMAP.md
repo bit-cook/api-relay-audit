@@ -32,6 +32,9 @@ contributor, arXiv:2026-04-26, 正交威胁轴：模型替换质量欺诈 vs 我
   standalone generation, public metrics, and dual-distribution parity tests.
   `scripts/collect-metrics.py --check` now fails on README / web /
   `docs/_metrics.md` step/test/version/HEAD drift.
+- **Builder prerequisite explicit**: the standalone generator is a developer
+  tool that requires Python 3.10+ (CI runs 3.11). The generated root
+  `audit.py` still preserves the user-facing stdlib + curl-only runtime.
 - **Phase 2 low-blast source-of-truth moves**: extracted Step 4/6 refusal
   vocabulary/helpers into `api_relay_audit/refusal.py` with
   `scripts.audit` re-exports for compatibility; extracted internal
@@ -55,7 +58,7 @@ contributor, arXiv:2026-04-26, 正交威胁轴：模型替换质量欺诈 vs 我
 - **Boundary held**: no hosted dashboard, no new dependency, no Claude Code
   header impersonation, no knowledge-cutoff/0-100/4-level risk/OpenAI
   streaming auto-detect, no copied closed-source fingerprint table.
-- **Final test count**: 673/673 passing (642 baseline → 673 after current
+- **Final test count**: 682/682 passing (642 baseline → 682 after current
   guardrail/contract tests).
 
 ### v2.1 and earlier (pre-session baseline)

@@ -429,6 +429,144 @@ def test_public_help_flags_parity():
     assert modular_flags == standalone_flags
 
 
+def _extract_overall_rating(markdown):
+    match = re.search(r"### (HIGH|MEDIUM|LOW) RISK", markdown)
+    assert match, f"Could not find overall rating in report:\n{markdown[-1000:]}"
+    return match.group(1)
+
+
+def _run_stubbed_audit_and_rating(module, monkeypatch, tmp_path, case_name, scenario):
+    class FakeClient:
+        base_url = "https://relay.example.com"
+        model = "claude-test"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def set_transparent_logger(self, logger):
+            pass
+
+    monkeypatch.setattr(module, "APIClient", FakeClient)
+    monkeypatch.setattr(module, "run_warmup", lambda client, count: None)
+    monkeypatch.setattr(module, "test_infrastructure", lambda *args: None)
+    monkeypatch.setattr(module, "test_models", lambda *args: None)
+    monkeypatch.setattr(module, "test_prompt_extraction", lambda *args: False)
+    monkeypatch.setattr(module, "test_jailbreak", lambda *args: None)
+    monkeypatch.setattr(module, "test_context_length", lambda *args: None)
+    monkeypatch.setattr(module, "test_infra_fingerprint", lambda *args: None)
+    monkeypatch.setattr(module, "test_latency_variance", lambda *args: None)
+    monkeypatch.setattr(module, "test_channel_classifier", lambda *args: None)
+
+    if scenario.get("crash_step"):
+        def crash(*args):
+            raise RuntimeError("synthetic step crash")
+
+        monkeypatch.setattr(module, scenario["crash_step"], crash)
+
+    monkeypatch.setattr(
+        module,
+        "test_token_injection",
+        lambda *args: scenario.get("injection", 0),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_instruction_conflict",
+        lambda *args: scenario.get("overridden", False),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_tool_substitution",
+        lambda *args: (
+            scenario.get("substitution_detected", False),
+            scenario.get("substitution_inconclusive", False),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_error_leakage",
+        lambda *args: (
+            scenario.get("error_severity", "none"),
+            scenario.get("error_inconclusive", False),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_stream_integrity",
+        lambda *args: (
+            scenario.get("stream_verdict", "clean"),
+            scenario.get("stream_inconclusive", False),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "test_web3_injection",
+        lambda *args: (
+            scenario.get("web3_verdict", "clean"),
+            scenario.get("web3_inconclusive", False),
+        ),
+    )
+
+    output = tmp_path / f"{module.__name__.replace('.', '_')}-{case_name}.md"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit.py",
+            "--key",
+            "sk-test",
+            "--url",
+            "https://relay.example.com/v1",
+            "--model",
+            "claude-test",
+            "--profile",
+            "full",
+            "--output",
+            str(output),
+        ],
+    )
+
+    module.main()
+    return _extract_overall_rating(output.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("case_name", "scenario", "expected"),
+    [
+        ("clean", {}, "LOW"),
+        ("d1_only", {"injection": 101}, "MEDIUM"),
+        ("d1_and_d2", {"injection": 101, "overridden": True}, "HIGH"),
+        ("d3_substitution", {"substitution_detected": True}, "HIGH"),
+        ("d4_medium", {"error_severity": "medium"}, "MEDIUM"),
+        ("d4_high", {"error_severity": "high"}, "HIGH"),
+        ("d5_anomaly", {"stream_verdict": "anomaly"}, "HIGH"),
+        ("d6_inconclusive", {"web3_inconclusive": True}, "MEDIUM"),
+        ("step_crash", {"crash_step": "test_models"}, "MEDIUM"),
+    ],
+)
+def test_overall_risk_matrix_semantic_parity(monkeypatch, tmp_path, case_name, scenario, expected):
+    """The generated standalone and modular entrypoints must make the same
+    user-visible risk decision for representative D1-D6 matrix paths.
+
+    The generated-artifact check prevents textual drift, but this semantic
+    smoke test keeps the important public behavior pinned without restoring
+    the old brittle byte-level risk-matrix block parity.
+    """
+    import scripts.audit as modular
+
+    standalone = _load_standalone_audit()
+
+    modular_rating = _run_stubbed_audit_and_rating(
+        modular, monkeypatch, tmp_path, f"modular-{case_name}", scenario,
+    )
+    standalone_rating = _run_stubbed_audit_and_rating(
+        standalone, monkeypatch, tmp_path, f"standalone-{case_name}", scenario,
+    )
+
+    assert modular_rating == expected
+    assert standalone_rating == expected
+    assert standalone_rating == modular_rating
+
+
 def test_standalone_transparent_log_call_writes_entry(tmp_path, monkeypatch):
     """The standalone --transparent-log flag must be backed by real logging,
     not merely accepted by argparse."""
