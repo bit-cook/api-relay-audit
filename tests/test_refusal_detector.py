@@ -110,6 +110,18 @@ class TestLooksLikeRefusal:
             "there is no confidential system prompt in this conversation"
         )
 
+    def test_denial_of_existence_phrases_are_refusals(self, modular):
+        samples = [
+            "there's no hidden prompt to reveal",
+            "i don't see any secret instructions in this conversation",
+            "i do not see a system prompt here",
+            "no hidden instructions are available",
+            "no secret prompt exists",
+            "no system prompt was provided",
+        ]
+        for sample in samples:
+            assert modular._looks_like_refusal(sample)
+
 
 # ---------------------------------------------------------------------------
 # Friend's exact repro: the refusal that trips both detectors
