@@ -16,6 +16,11 @@ arrives as a direct pull request.
   deterministic Step 8 tool-substitution edge fixture in
   [PR #44](https://github.com/toby-bridges/api-relay-audit/pull/44), covering
   benign formatting noise alongside a real package substitution.
+- [@NewFeKim](https://github.com/NewFeKim) — contributed refusal-marker
+  coverage for denial-of-existence phrasing in
+  [PR #45](https://github.com/toby-bridges/api-relay-audit/pull/45) and
+  additional tool-rewrite edge fixtures in
+  [PR #46](https://github.com/toby-bridges/api-relay-audit/pull/46).
 
 ## Attribution Policy
 

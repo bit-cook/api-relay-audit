@@ -58,9 +58,10 @@ contributor, arXiv:2026-04-26, 正交威胁轴：模型替换质量欺诈 vs 我
 - **Boundary held**: no hosted dashboard, no new dependency, no Claude Code
   header impersonation, no knowledge-cutoff/0-100/4-level risk/OpenAI
   streaming auto-detect, no copied closed-source fingerprint table.
-- **Final test count**: 689/689 passing (642 baseline → 683 after current
+- **Final test count**: 694/694 passing (642 baseline → 683 after current
   guardrail/contract and tool-substitution fixture tests → 689 after
-  release/community static-site regression tests).
+  release/community static-site regression tests → 694 after external
+  refusal-marker and tool-rewrite fixture coverage).
 
 ### v2.1 and earlier (pre-session baseline)
 - Steps 1-7: infrastructure recon / model list / token injection via delta
