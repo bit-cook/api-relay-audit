@@ -149,6 +149,10 @@ AGPL-3.0-only. See [LICENSE](./LICENSE).
 
 This keeps modified network-service deployments accountable to the same public source-availability standard as the relay ecosystem evidence we audit.
 
+## Citation
+
+If you use API Relay Audit in research, security reports, or public relay evaluations, please cite the software with [CITATION.cff](./CITATION.cff). The citation file also records the two academic papers that inform the audit model: Liu et al., *Your Agent Is Mine* (arXiv:2604.08407) and Zhang et al., *Real Money, Fake Models* (arXiv:2603.01919).
+
 ## How to Contribute
 
 Good first contributions are small, reproducible, and evidence-focused: documentation examples, deterministic detector tests, or clearer wording around `clean`, `anomaly`, and `inconclusive` results.

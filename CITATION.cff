@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+message: "If you use API Relay Audit in research, security reports, or public relay evaluations, please cite the software using these metadata. The references below record academic work that informed the audit model; cite those papers directly when you rely on their methods or findings."
+type: software
+title: "API Relay Audit"
+version: "2.3"
+authors:
+  - family-names: "Bridges"
+    given-names: "Toby"
+abstract: "API Relay Audit is a local security audit tool for third-party AI API relays and LLM proxies. It detects prompt injection, model substitution, tool-call rewriting, error leakage, SSE stream anomalies, Web3 wallet risks, infrastructure fingerprints, latency variance, and upstream channel mismatches while sending the API key only to the relay URL chosen by the user."
+license: "AGPL-3.0-only"
+repository-code: "https://github.com/toby-bridges/api-relay-audit"
+url: "https://toby-bridges.github.io/api-relay-audit/"
+keywords:
+  - "AI API relay"
+  - "LLM proxy"
+  - "prompt injection"
+  - "model substitution"
+  - "tool-call rewriting"
+  - "SSE stream integrity"
+  - "Web3 wallet security"
+  - "security audit"
+references:
+  - type: article
+    title: "Your Agent Is Mine: Measuring Malicious Intermediary Attacks on the LLM Supply Chain"
+    authors:
+      - family-names: "Liu"
+        given-names: "Hanzhi"
+      - family-names: "Shou"
+        given-names: "Chaofan"
+      - family-names: "Wen"
+        given-names: "Hongbo"
+      - family-names: "Chen"
+        given-names: "Yanju"
+      - family-names: "Fang"
+        given-names: "Ryan Jingyang"
+      - family-names: "Feng"
+        given-names: "Yu"
+    year: 2026
+    url: "https://arxiv.org/abs/2604.08407"
+  - type: article
+    title: "Real Money, Fake Models: Deceptive Model Claims in Shadow APIs"
+    authors:
+      - family-names: "Zhang"
+        given-names: "Yage"
+      - family-names: "Jiang"
+        given-names: "Yukun"
+      - family-names: "Chen"
+        given-names: "Zeyuan"
+      - family-names: "Backes"
+        given-names: "Michael"
+      - family-names: "Shen"
+        given-names: "Xinyue"
+      - family-names: "Zhang"
+        given-names: "Yang"
+    year: 2026
+    url: "https://arxiv.org/abs/2603.01919"
