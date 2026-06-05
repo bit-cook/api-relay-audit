@@ -36,6 +36,7 @@ MAX_FLAG_LENGTH = 500
 MAX_IMAGES = 4
 MAX_VERSION_LENGTH = 20
 STALE_AFTER_DAYS = 90
+TESTED_AT_FUTURE_GRACE_SECONDS = 300
 
 HOSTNAME_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 TOOL_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
@@ -120,6 +121,24 @@ def is_valid_hostname(hostname):
     return all(HOSTNAME_LABEL_RE.fullmatch(label) for label in labels)
 
 
+def evidence_needs_staleness_review(tested_at, now=None):
+    """Return True when submitted evidence is older than its review window."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return parse_tested_at(tested_at) + timedelta(days=STALE_AFTER_DAYS) < now
+
+
+def build_evidence_branch_name(relay_domain, issue_number):
+    """Build the only branch shape used for draft evidence-publication PRs."""
+    domain = normalize_domain(relay_domain)
+    issue = str(issue_number or "").strip()
+    if not is_valid_hostname(domain):
+        raise ValueError(f"invalid evidence branch domain: {relay_domain!r}")
+    if not issue.isdecimal():
+        raise ValueError(f"invalid evidence branch issue number: {issue_number!r}")
+    return f"community/evidence-{domain}-issue-{int(issue)}"
+
+
 def validate_fields(fields):
     """Return list of error messages. Empty list = valid shape."""
     errors = []
@@ -159,9 +178,15 @@ def validate_fields(fields):
     tested_at = fields.get("tested_at", "")
     if tested_at:
         try:
-            parse_tested_at(tested_at)
+            parsed_tested_at = parse_tested_at(tested_at)
         except ValueError:
             errors.append(f"Invalid tested_at ISO date/datetime: {tested_at}")
+        else:
+            future_cutoff = datetime.now(timezone.utc) + timedelta(
+                seconds=TESTED_AT_FUTURE_GRACE_SECONDS
+            )
+            if parsed_tested_at > future_cutoff:
+                errors.append(f"tested_at cannot be in the future: {tested_at}")
 
     report_hash = fields.get("report_hash", "")
     if report_hash and not REPORT_HASH_RE.fullmatch(report_hash.strip()):
@@ -336,6 +361,11 @@ def main():
         _set_output("status", "NEEDS_REVIEW")
         sys.exit(3)
 
+    if evidence_needs_staleness_review(fields["tested_at"]):
+        print("NEEDS_REVIEW: evidence is older than the staleness review window")
+        _set_output("status", "NEEDS_REVIEW")
+        sys.exit(3)
+
     if EVIDENCE_JSON.exists():
         evidence_data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
     else:
@@ -351,6 +381,7 @@ def main():
         sys.exit(4)
 
     entry = build_evidence_record(fields, author, issue_number)
+    evidence_branch = build_evidence_branch_name(entry["relayDomain"], issue_number)
     evidence_data.append(entry)
 
     EVIDENCE_JSON.parent.mkdir(parents=True, exist_ok=True)
@@ -364,6 +395,7 @@ def main():
     _set_output("report_hash", entry["reportHash"])
     _set_output("report_artifact_url", entry["reportArtifactUrl"])
     _set_output("tool_commit", entry["toolCommit"])
+    _set_output("evidence_branch", evidence_branch)
     print(f"SHAPE_VALID: staged evidence for {domain} (#{issue_number}) by @{author}")
     print("Publication requires maintainer review via PR; no direct master push.")
 

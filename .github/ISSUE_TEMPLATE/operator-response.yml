@@ -18,11 +18,10 @@ body:
       label: Domain Ownership Proof / 域名控制权证明
       description: |
         Add a DNS TXT record: `_relay-audit-verify=<this-issue-number>`
-        We may use this to link the response to a domain operator. This is not
-        a trusted-relay certification.
+        We may use this only to link the response to a domain operator.
 
         添加 DNS TXT 记录：`_relay-audit-verify=<本issue编号>`
-        我们可能用它确认回应者与域名的关系；这不是对中转站安全性的官方背书。
+        我们只用它确认回应者与域名的关联。
       placeholder: "I have added the TXT record _relay-audit-verify=123"
     validations:
       required: true

@@ -5,11 +5,15 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from process_submission import (  # noqa: E402
+    build_evidence_branch_name,
     build_evidence_record,
     check_account_age,
     check_rate_limit,
+    evidence_needs_staleness_review,
     extract_artifact_url,
     extract_image_urls,
     load_pending_evidence_pr_entries,
@@ -380,6 +384,33 @@ def test_tested_at_date_or_datetime():
     assert [e for e in validate_fields(fields) if "tested_at" in e]
 
 
+def test_tested_at_future_is_rejected():
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    fields = parse_issue_body(_make_body(tested_at=future))
+    errors = validate_fields(fields)
+    assert any("tested_at cannot be in the future" in e for e in errors)
+
+
+def test_stale_evidence_needs_review():
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    assert evidence_needs_staleness_review("2026-03-01T00:00:00Z", now=now) is True
+    assert evidence_needs_staleness_review("2026-05-01T00:00:00Z", now=now) is False
+
+
+def test_evidence_branch_name_is_canonical():
+    assert (
+        build_evidence_branch_name("API.Example.COM.", "0042")
+        == "community/evidence-api.example.com-issue-42"
+    )
+    for domain, issue in [
+        ("api.example.com/path", "42"),
+        ("bad_domain.com", "42"),
+        ("api.example.com", "42;rm"),
+    ]:
+        with pytest.raises(ValueError):
+            build_evidence_branch_name(domain, issue)
+
+
 def test_build_entry_low_rating_preserves_tool_reported_rating():
     """LOW is a tool-reported result, not a platform safety endorsement."""
     fields = parse_issue_body(_make_body(overall_rating="LOW"))
@@ -476,13 +507,15 @@ def test_main_creates_evidence_json(tmp_path, monkeypatch):
     import process_submission as mod
 
     fake_evidence = tmp_path / "web" / "data" / "evidence.json"
+    output_file = tmp_path / "github-output.txt"
     assert not fake_evidence.exists()
     monkeypatch.setattr(mod, "EVIDENCE_JSON", fake_evidence)
 
-    monkeypatch.setenv("ISSUE_BODY", _make_body())
+    monkeypatch.setenv("ISSUE_BODY", _make_body(tested_at=datetime.now(timezone.utc).isoformat()))
     monkeypatch.setenv("ISSUE_AUTHOR", "testbot")
     monkeypatch.setenv("ISSUE_NUMBER", "1")
     monkeypatch.setenv("AUTHOR_CREATED_AT", "2020-01-01T00:00:00Z")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
 
     mod.main()
 
@@ -491,3 +524,56 @@ def test_main_creates_evidence_json(tmp_path, monkeypatch):
     assert len(data) == 1
     assert data[0]["relayDomain"] == "api.example.com"
     assert data[0]["evidenceStatus"] == "accepted_unverified"
+
+    output = output_file.read_text(encoding="utf-8")
+    assert "status=SHAPE_VALID" in output
+    assert "relay_domain=api.example.com" in output
+    assert f"report_hash=sha256:{REPORT_HASH}" in output
+    assert "report_artifact_url=https://github.com/user-attachments/files/123/report-redacted.md" in output
+    assert "tool_commit=040676c" in output
+    assert "evidence_branch=community/evidence-api.example.com-issue-1" in output
+
+
+def test_main_routes_stale_evidence_to_review_without_writing(tmp_path, monkeypatch):
+    import process_submission as mod
+
+    fake_evidence = tmp_path / "web" / "data" / "evidence.json"
+    output_file = tmp_path / "github-output.txt"
+    monkeypatch.setattr(mod, "EVIDENCE_JSON", fake_evidence)
+    monkeypatch.setenv("ISSUE_BODY", _make_body(tested_at="2000-01-01T00:00:00Z"))
+    monkeypatch.setenv("ISSUE_AUTHOR", "testbot")
+    monkeypatch.setenv("ISSUE_NUMBER", "1")
+    monkeypatch.setenv("AUTHOR_CREATED_AT", "2020-01-01T00:00:00Z")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+
+    assert exc.value.code == 3
+    assert not fake_evidence.exists()
+    assert "status=NEEDS_REVIEW" in output_file.read_text(encoding="utf-8")
+
+
+def test_workflow_uses_draft_evidence_pr_contract():
+    workflow = (
+        Path(__file__).resolve().parent.parent
+        / ".github"
+        / "workflows"
+        / "process-submission.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "EVIDENCE_BRANCH: ${{ steps.process.outputs.evidence_branch }}" in workflow
+    assert 'BRANCH="${EVIDENCE_BRANCH}"' in workflow
+    assert "gh pr edit" in workflow
+    assert "gh pr create" in workflow
+    assert "--draft" in workflow
+    assert "web/data/evidence.json" in workflow
+    assert "web/data/relays.json" not in workflow
+    for forbidden in [
+        "leaderboard",
+        "trusted-relay",
+        "certification",
+        "safety endorsement",
+        "relay recommendation",
+    ]:
+        assert forbidden not in workflow

@@ -170,9 +170,10 @@ jobs:
           REPORT_HASH: ${{ steps.process.outputs.report_hash }}
           REPORT_ARTIFACT_URL: ${{ steps.process.outputs.report_artifact_url }}
           TOOL_COMMIT: ${{ steps.process.outputs.tool_commit }}
+          EVIDENCE_BRANCH: ${{ steps.process.outputs.evidence_branch }}
         run: |
           set -euo pipefail
-          BRANCH="community/evidence-${RELAY_DOMAIN}-issue-${ISSUE_NUMBER}"
+          BRANCH="${EVIDENCE_BRANCH}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git switch -c "${BRANCH}"
@@ -198,7 +199,7 @@ jobs:
 
           ## Governance
 
-          This is not a trusted-relay certification, not a safety endorsement, and not a leaderboard ranking. It is a proposed entry in the Community Evidence Registry. Merge only after maintainer review confirms the submitted evidence shape and publication boundary.
+          This is a proposed Community Evidence Registry record. Merge only after maintainer review confirms the submitted evidence shape, artifact/hash linkage, and publication boundary.
           EOF
           if gh pr view "${BRANCH}" --json url --jq .url >/tmp/existing-pr-url 2>/dev/null; then
             PR_URL="$(cat /tmp/existing-pr-url)"
@@ -230,7 +231,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: `✅ Shape validation passed. A draft evidence-publication PR was created for maintainer review: ${process.env.PR_URL}\n\n✅ 格式校验通过。系统已创建待人工复核的证据发布 PR：${process.env.PR_URL}\n\nNote: this has not been published to master, is not a relay recommendation, and is not a trusted-relay certification or safety endorsement.`
+              body: `✅ Shape validation passed. A draft Community Evidence Registry publication PR was created for maintainer review: ${process.env.PR_URL}\n\n✅ 格式校验通过。系统已创建待人工复核的 Community Evidence Registry 发布 PR：${process.env.PR_URL}\n\nThis evidence has not been published to master; publication requires maintainer review and merge of that PR.`
             });
         env:
           PR_URL: ${{ steps.evidence_pr.outputs.pr_url }}
