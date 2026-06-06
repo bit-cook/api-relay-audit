@@ -6,7 +6,9 @@ item has a short rationale so future contributors (including future
 iterations of the author) can quickly reconstruct why a thing is or is not
 on the list.
 
-**Last updated**: 2026-06-01 (Phase 3 full standalone generation landed; standalone remains first-class curl-only artifact while modular source is the source of truth)
+**Last updated**: 2026-06-07 (roadmap hygiene pass: v1.9 follow-up test gaps,
+refusal/transport decouplings, and the protobuf-channel spike are no longer
+active near-term candidates)
 
 **Threat model anchor**: Liu et al., *Your Agent Is Mine: Measuring
 Malicious Intermediary Attacks on the LLM Supply Chain*, arXiv:2604.08407.
@@ -49,6 +51,12 @@ contributor, arXiv:2026-04-26, 正交威胁轴：模型替换质量欺诈 vs 我
 - **ROADMAP 2.4 coverage closed**: real-body `APIClient.ensure_format()`
   tests now cover modular and standalone behavior; argparse-level
   `--latency-probe-count` wiring is pinned on both distributions.
+- **ROADMAP 2.45 low-blast decouplings closed**: the Step 4/6 refusal
+  vocabulary/helpers now live in `api_relay_audit/refusal.py` with
+  compatibility re-exports, and low-level transport mechanics now live in
+  `api_relay_audit/_transport.py` behind the existing `APIClient` facade.
+  The archived thinking-signature investigation script remains under
+  `scripts/experiments/verify_signature_schema.py`.
 - **Issue #14 downstream-fork uptake**: credited
   [@liuwei71320](https://github.com/liuwei71320) in `CONTRIBUTORS.md` for
   `ai-relay-audit-gui`; upstreamed the Windows long-context stability
@@ -230,16 +238,17 @@ and deferred the other two to v1.9.
   implementation these fail loudly because the mocked client returns
   instantaneously (elapsed ≈ 0), whereas the fake `perf_counter`
   yields `elapsed = 1.0`. Both distributions pinned.
-- **#2 test gap — `ensure_format` only exercised via mock**: deferred
-  to v1.9 (see item 2.5 below). Current `test_ensure_format_called_
-  before_timing` proves the ordering contract but does not exercise
-  the real `APIClient.ensure_format()` body.
-- **#5 test gap — validator not tested at `parse_args()` level**:
-  deferred to v1.9. Unit tests on `validate_probe_count` + parity
-  test on the constants are both green; what is missing is an
-  end-to-end `parse_args(["--latency-probe-count", "0"])` test that
-  fails with `SystemExit(2)` proving the wiring inside `scripts/
-  audit.py` AND the standalone argparse actually uses the validator.
+- **#2 test gap — `ensure_format` only exercised via mock**: **fixed in
+  v1.9**. `tests/test_client.py::TestAutoDetection::test_ensure_format_
+  real_body_detects_anthropic` exercises the real modular method body, and
+  `tests/test_dual_distribution_parity.py::test_standalone_ensure_format_
+  real_body_detects_anthropic` mirrors the same coverage onto the generated
+  standalone artifact.
+- **#5 test gap — validator not tested at `parse_args()` level**: **fixed
+  in v1.9**. `tests/test_dual_distribution_parity.py::test_latency_probe_
+  count_argparse_wiring_rejects_invalid_values` proves both distributions
+  wire `validate_probe_count` into argparse and reject invalid values with
+  `SystemExit(2)`.
 - **Final test count**: 562/562 passing (560 → 562, +2 this round).
 
 ### v1.8.2 Identity consistency wording (shipped 2026-05-29)
@@ -266,6 +275,8 @@ answers to "what model are you" self-identified as Qwen/DeepSeek in 4 of
 
 Pick one of these to start the next session. Each is scoped to fit in a
 single session, has a clear spec, and does not require new infrastructure.
+Items marked ✅ closed or historical are retained for auditability only; do
+not pick them as new work unless new evidence reopens the decision.
 
 ### 0. v1.8.1 — app-layer vs edge-layer framework separation
 **Status**: deferred from v1.8 Codex review HIGH finding (2026-04-18)
@@ -313,83 +324,45 @@ SOL Token Program / ERC-20 transfer calldata / BTC bech32 address.
 **Cost of deferring further**: low — no new adversarial case reported
 since the original paper.
 
-### 2.4 v1.9 — test-coverage follow-ups from Codex review cycle #2 round 2
-**Status**: 2 deferred test-coverage gaps from 2026-04-20 Codex
-verification; code-side fixes already shipped in v1.8.1.
-**Scope**: ~40 LOC new tests, no product changes.
+### 2.4 v1.9 — test-coverage follow-ups from Codex review cycle #2 round 2 ✅ closed
+**Status**: shipped in v1.9. This item is kept only as historical context
+for why the tests exist.
 
-1. **`ensure_format` real-body integration test** — current
-   `test_ensure_format_called_before_timing` proves the call-ordering
-   contract via a mock but never runs the real
-   `api_relay_audit.client.APIClient.ensure_format()` body. A reviewer
-   could silently replace the real method with a no-op and all tests
-   would still pass. Add an integration-style test that constructs a
-   real `APIClient` (mocked HTTP transport), calls `ensure_format()`,
-   and asserts `_format` is set to a sentinel value afterwards. Mirror
-   into the standalone via the `_load_standalone_audit()` helper in
-   `test_dual_distribution_parity.py`.
-2. **`--latency-probe-count` parser-level wiring test** — current
-   `TestValidateProbeCount` class exercises the validator directly but
-   does not prove `scripts/audit.py`'s argparse AND the standalone
-   argparse both actually wire the validator. Add a test that invokes
-   each distribution's `parse_args` (or entry point with
-   `monkeypatch.setattr(sys, "argv", ...)`) with values `0`, `-1`,
-   `51` and asserts `SystemExit(2)`. Without this, someone could
-   accidentally drop `type=validate_probe_count` from the
-   `add_argument` call and all existing tests would still pass.
+1. **`ensure_format` real-body integration test** — fixed by
+   `tests/test_client.py::TestAutoDetection::test_ensure_format_real_body_
+   detects_anthropic` plus the generated-standalone mirror in
+   `tests/test_dual_distribution_parity.py::test_standalone_ensure_format_
+   real_body_detects_anthropic`.
+2. **`--latency-probe-count` parser-level wiring test** — fixed by
+   `tests/test_dual_distribution_parity.py::test_latency_probe_count_argparse_
+   wiring_rejects_invalid_values`, which drives both modular and standalone
+   `parse_args()` with invalid values and expects `SystemExit(2)`.
 
-**Cost of deferring further**: low. Both are "defence-in-depth"
-rather than real bugs — the v1.8.1 fixes themselves are correct,
-these tests just harden the regression guard. Revisit when the next
-feature cycle starts (same session that picks up 2.5 over-engineering
-prune is a natural fit).
+**Cost of deferring further**: none; there is no remaining action for this
+item unless a future CLI refactor changes argparse wiring again.
 
 ### 2.45 v1.9 — controlled-blast decouplings (handoff-prep triage, 2026-04-20)
 
-**Status**: audit done 2026-04-20 before front-end handoff.
-**Shipped in this audit**: Tier A archival — `scripts/verify_signature_
-schema.py` moved to `scripts/experiments/` (zero blast on imports, no
-module references the archived script). Codex review on the move
-caught one latent path-drift bug: `OUT_DIR = Path(__file__).parent.
-parent / "reports"` would have written to `scripts/reports/` rather
-than `<repo_root>/reports/` after the rename. Fixed in the same
-branch by bumping the anchor to `.parent.parent.parent`. Regression
-lesson: whenever a script moves deeper into the tree, `__file__`-
-relative paths inside it must be re-verified.
-**Deferred to v1.9**: four real decoupling candidates ranked by
-blast-radius vs. leverage.
+**Status**: partially shipped in v1.9. This section now tracks the remaining
+decouplings, not the low-blast work that already landed.
+**Shipped**:
+- Tier A archival — `scripts/verify_signature_schema.py` moved to
+  `scripts/experiments/` (zero blast on imports, no module references the
+  archived script). Codex review on the move caught one latent path-drift bug:
+  `OUT_DIR = Path(__file__).parent.parent / "reports"` would have written to
+  `scripts/reports/` after the rename. Fixed by bumping the anchor to
+  `.parent.parent.parent`.
+- Step 4/6 refusal vocabulary/helpers moved into `api_relay_audit/refusal.py`
+  with `scripts.audit` compatibility re-exports.
+- Phase 2a transport extraction landed as `api_relay_audit/_transport.py`
+  behind the existing `APIClient` facade.
 
-1. **Extract `REFUSAL_MARKERS` + `_looks_like_refusal`**
-   from `scripts/audit.py` (lines 81, 156-158) into a new module
-   `api_relay_audit/refusal.py`.
-   **Scope** (verified via grep, 2026-04-20 Codex review):
-   - 3 call sites of `_looks_like_refusal` in `scripts/audit.py`
-     (lines 178, 403, 559) — NOT 6 as initially stated
-   - `tests/test_refusal_detector.py` already imports
-     `modular._looks_like_refusal` directly; a re-export on
-     `scripts/audit.py` keeps the test untouched, a hard rename
-     does not
-   - `tests/test_clean_summary_flags.py` does not import the
-     helpers but does exercise Step 4/6 with a `CLEAN_REFUSAL`
-     fixture, so any behavior change in the helper surfaces here
-   - Standalone `audit.py` keeps its inline copy unchanged — the
-     existing `TestRefusalMarkerParity` parity test covers drift
-   **Blast radius**: LOW. Parity test is the regression guard; if
-   it stays green and the test suite passes, the extraction is
-   safe. Recommended approach: re-export on `scripts.audit` so
-   `tests/test_refusal_detector.py` needs zero changes.
-   **Why now-safe**: unlike a client.py / audit.py split, this
-   does NOT require a standalone refactor because the parity
-   strategy already treats refusal markers as "inline on
-   standalone, imported on modular" in principle — we just need
-   to complete that on the modular side.
-   **Prereq**: none.
-   **Time estimate**: 25-30 min.
-   **Why deferred past this handoff**: medium-value, not zero-
-   blast. A typo in an import path or a missed call site would
-   produce a silent refusal-detection regression; worth a
-   proper code review rather than a 30-min squeeze before
-   handoff.
+**Remaining decoupling candidates** are ranked by blast-radius vs. leverage.
+
+1. **Extract `REFUSAL_MARKERS` + `_looks_like_refusal`** — **closed in
+   v1.9**. The modular source now imports/re-exports helpers from
+   `api_relay_audit/refusal.py`; standalone keeps the generated inline copy,
+   with refusal-marker parity tests guarding drift.
 
 2. **Split `api_relay_audit/client.py` (924 LOC)**
    into `client/transport.py` + `client/format_detection.py` +
@@ -397,31 +370,20 @@ blast-radius vs. leverage.
 
    **Codex review follow-up (2026-04-20)**: my original "HIGH
    blast / blocked on dual-distribution policy" framing was over-
-   pessimistic. A cheaper incremental path exists:
+   pessimistic. A cheaper incremental path existed, and Phase 2a
+   has now landed: low-level httpx/curl mechanics live in internal
+   `api_relay_audit/_transport.py`, while `APIClient` remains the
+   public facade.
 
-     *Phase 2a — transport extraction only, facade-preserved.*
-     Move just the httpx-vs-curl transport code into an internal
-     `api_relay_audit/_transport.py` helper module and have
-     `api_relay_audit/client.py` import from it. `APIClient`
-     class stays in `client.py`; all public imports stay valid.
-     No test changes. Standalone `audit.py` stays flat because
-     modular's public API is unchanged — the parity constraint
-     does not care what's behind the facade. Blast radius: LOW.
-     Time estimate: 60-90 min.
-
-   After 2a lands and stabilizes, Phase 2b (stream extraction)
+   After 2a stabilizes, Phase 2b (stream extraction)
    and 2c (format-detection extraction) can follow the same
    pattern. Only Phase 2d ("promote the internal modules to
    public re-exports under `api_relay_audit.client.*`") needs
    the dual-distribution policy decision, because that is when
    the standalone flat copy starts diverging.
 
-   **Scope (Phase 2a only)**: ~300 LOC moved into internal
-   helper + ~30 LOC of import rewiring inside `client.py`. No
-   change to public import paths. No change to standalone.
-   **Blast radius (Phase 2a)**: LOW.
-   **Prereq (Phase 2a)**: none.
-   **Time estimate (Phase 2a)**: 60-90 min.
+   **Remaining scope**: Phase 2b/2c only. Keep them facade-preserved
+   unless there is a concrete user-facing reason to expose submodules.
 
    **Original full-split Phase 2d** (for reference): HIGH blast,
    blocked on dual-distribution policy (keep / deprecate /
@@ -477,10 +439,11 @@ blast-radius vs. leverage.
    README cross-links), NOT 1 hour.
 
 **Cost of deferring further**: moderate. The former #1 and the Phase-2a
-slice of #2 are now shipped, and Phase 3 generation removed the
+slice of #2 are shipped, and Phase 3 generation removed the old
 dual-distribution blocker. The next backend refactor can start with the
-`scripts/audit.py` step-orchestration split; #4 remains a front-end
-colleague conversation, not a backend task.
+`scripts/audit.py` step-orchestration split or a facade-preserved stream /
+format-detection extraction; #4 remains a front-end colleague conversation,
+not a backend task.
 
 ### 2.5 v1.9 — over-engineering prune (backlog, handoff-prep triage)
 **Status**: audit done 2026-04-20 before front-end handoff; no deletions
@@ -519,9 +482,12 @@ inert reference code. Revisit when next feature cycle starts.
 
 ### 2.6 v1.9 — cctest.ai 复查衍生候选 (2026-05-03)
 
-**Status**: Spike-only / 研究阶段。**禁止动 master**；任何实现尝试只能落到
-draft PR，给前端同事 (post-2026-04-20 handoff) 接管时一并审视后再决定是否
-合并。无 spike 结果之前不写产品代码、不动 6D 风险矩阵、不动双分发。
+**Status**: partially shipped. Step 14 upstream channel classifier shipped in
+v1.9 through the lower-risk header/id/body route. The old protobuf-signature
+reverse-engineering plan is now historical context, not an active near-term
+candidate. Remaining items in this section stay spike-only / research-only:
+no default audit wiring, no 6D risk-matrix change, and no public per-relay
+claims without reviewable evidence.
 
 **Source**: cctest.ai/zh + cctest.ai/zh/faq 复查 (2026-05-03)。Memory
 `reference_cctest_ai.md` 同步更新。变更点 vs 19 天前情报：
@@ -565,7 +531,7 @@ draft PR，给前端同事 (post-2026-04-20 handoff) 接管时一并审视后再
 > Spike 阶段先验证 header-based 方案是否已满足需求，再决定是否还需 protobuf。
 > 结果：header-based 已经足够，protobuf 方案弃了（见下面"原方案"段，留作历史档案）。
 
-**原 Protobuf 签名解析 (upstream channel ID)**
+**原 Protobuf 签名解析 (upstream channel ID) — historical, not active**
 
 **What cctest.ai claims to do**: 解析 Anthropic 流式响应里的 signature
 字段 (Protobuf 编码)，反推上游渠道 → 输出
@@ -573,10 +539,12 @@ draft PR，给前端同事 (post-2026-04-20 handoff) 接管时一并审视后再
 `windsurf` / `antigravity` 标签，再对签名做 replay 校验是否被篡改。
 这是他们公开宣称的"业界最专业"护城河，闭源不公开算法。
 
-**Why this is the only真新技术 worth spiking**: 我们目前只能通过响应体
-关键词 (v1.7.4) 推断渠道，无法对签名做结构化解析。如果协议可解析，可以
-新增一个 **D7 渠道维度**（与现有 D1-D6 正交），把"渠道身份"从软指标
-升级为硬指标。
+**Why this was worth considering**: before Step 14 shipped, we could only
+infer channel from response wording and infrastructure clues. A parseable
+signature protocol might have provided a harder channel signal. In practice,
+the cleaner header/id/body classifier delivered the useful part without
+reverse-engineering a brittle opaque signature protocol or expanding the
+risk matrix.
 
 **Spike scope (research-only, NO product code)**:
 1. 抓取 5-10 条真实 Claude 直连响应（通过本地 `--transparent-log`
@@ -591,6 +559,9 @@ draft PR，给前端同事 (post-2026-04-20 handoff) 接管时一并审视后再
 5. 写最小 PoC `scripts/experiments/signature_decode_spike.py`（类比
    v1.8 时期的 `verify_signature_schema.py`，进 `experiments/` 不进
    主 pipeline），输出可行性报告 → ROADMAP §2.6.1 状态更新
+
+Current decision: do not run this spike unless new field evidence shows
+header/id/body classification is materially insufficient.
 
 **Pre-conditions to ship as Step 14**:
 - Anthropic 官方未来不破坏 wire format 的合理把握（cctest 自己也吃这个
@@ -699,14 +670,15 @@ clean-room 参考算法；全仓库改为 AGPL-3.0-only 后，可在保留归属
 |---|---|
 | 直接抄 cctest.ai 的 signature 字段映射表 | 闭源 SaaS 无 license；必须 clean-room reimplementation 从真实样本反推 |
 | 把 cctest.ai 的渠道标签字符串复用 | 同上；用方独立命名（如 `channel: bedrock-likely` 而非 `aws-bedrock`） |
-| 在 spike 阶段就升级 6D → 7D 矩阵 | 矩阵升级是 Step 14 ship 的最后一步，不是 spike 阶段决策 |
+| 在 spike 阶段就升级 6D → 7D 矩阵 | Step 14 已作为 informational classifier ship；渠道身份仍不进入风险矩阵。 |
 | 引入第三方多模态裁判模型 | 破坏零依赖不变量；裁判用关键词 + token overlap 可解决 |
 | 在 §2.6 spike 通过前公开任何 cctest.ai 测试结果 | 数据外泄风险；任何对外发布需用户显式批准 |
 
-**Cost of deferring further**: 低-中。cctest.ai 是闭源 SaaS，他们改不改
-我们也跟不到；但如果中转站市场普遍意识到 protobuf 签名校验是新基线，
-我们没有这能力会显得跛脚。建议下一个 feature cycle 启动时先做
-§2.6.1 spike（拿真实样本判断可行性），通过再做 §2.6.2。
+**Cost of deferring further**: low. Step 14 already covers the practical
+channel-classification need without protobuf parsing. If future field reports
+show header/id/body signals are insufficient, reopen the protobuf spike from
+this historical plan; otherwise the next real research candidate here is
+§2.6.2 multimodal dilution, and only as an experiments-only spike.
 
 ---
 
@@ -967,9 +939,11 @@ When adding any new feature, verify these hold before committing:
 
 **Starting a new session**:
 1. Read the top "Shipped" section to know current state
-2. Read "Near-term candidates" — pick one based on available time
-3. If the session is short (< 1 hour), pick items 1, 3, or 4. If longer,
-   pick item 2 or 5.
+2. Read "Near-term candidates" — skip entries marked closed / historical,
+   then pick one based on available time and current field evidence
+3. If the session is short (< 1 hour), prefer validation / docs /
+   rebase-safe work. If longer, pick a feature candidate only after checking
+   the architectural invariants and current PR queue.
 
 **Completing a feature**:
 1. Move it from "Near-term" to "Shipped" with the commit hash
