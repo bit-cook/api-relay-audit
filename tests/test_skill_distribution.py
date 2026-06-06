@@ -41,6 +41,7 @@ def test_skill_frontmatter_declares_required_distribution_fields():
     assert _has_line(hermes, r"^name:\s+api-relay-audit$")
     assert _has_line(hermes, r"^description:\s+Use when")
     assert _has_line(hermes, r"^version:\s+2\.3\.0$")
+    assert _has_line(hermes, r"^platforms:\s+\[linux,\s+macos,\s+windows\]$")
     for field in [
         "author: Toby Bridges",
         "license: AGPL-3.0-only",
@@ -107,3 +108,11 @@ def test_root_skill_secret_handling_prefers_secure_environment():
     assert "API_RELAY_AUDIT_KEY" in text
     assert "The agent may also ask the user directly" not in text
     assert "avoid repeating the raw key in chat" in text
+
+
+def test_hermes_skill_supports_windows_git_bash_contract():
+    text = _read(HERMES_SKILL)
+    frontmatter = _frontmatter(HERMES_SKILL)
+    assert "windows" in frontmatter
+    assert "Git Bash" in text
+    assert "PowerShell" in text

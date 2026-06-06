@@ -4,7 +4,7 @@ description: Use when auditing third-party AI API relays, proxy APIs, or API-key
 version: 2.3.0
 author: Toby Bridges
 license: AGPL-3.0-only
-platforms: [linux, macos]
+platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [security, red-teaming, ai-safety, api-relay, web3]
@@ -22,7 +22,7 @@ required_environment_variables:
 
 This skill runs `api-relay-audit`, a zero-dependency security audit for third-party AI API relays and proxy services. It checks whether the relay tampers with prompts, truncates context, rewrites package-install instructions, leaks upstream credentials or internal headers, corrupts Anthropic SSE streams, changes the upstream channel, or injects unsafe Web3 wallet behavior.
 
-Use the standalone `audit.py` path by default. It only needs Python 3 and `curl`, which makes it suitable for local Hermes terminal sessions and sandboxed execution.
+Use the standalone `audit.py` path by default. It only needs Python 3 and `curl`, which makes it suitable for local Hermes terminal sessions and sandboxed execution. On Windows, run the POSIX shell recipes from Git Bash or an equivalent shell; direct `python audit.py ...` invocations also work from PowerShell when the environment variables are set.
 
 ## When to Use
 
@@ -70,6 +70,10 @@ Never print the raw API key in summaries, filenames, reports, shell traces, or G
 ## One-Shot Audit Recipe
 
 Use this when the user provides a base URL and wants a normal audit:
+
+This recipe is POSIX shell. On Windows Hermes hosts, use Git Bash for this
+one-shot form; if the repository already has `audit.py`, PowerShell can run the
+direct local command shown after the recipe.
 
 ```bash
 set -euo pipefail
