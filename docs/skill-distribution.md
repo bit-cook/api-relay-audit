@@ -18,6 +18,10 @@ Both files must stay aligned with the current audit surface:
 - local-first execution
 - API key not repeated in chat, logs, filenames, or public comments
 - no claim that a relay is certified safe
+- Hermes platform support includes Linux, macOS, and Windows. The Windows
+  contract is Python 3 + `curl` with Git Bash or an equivalent POSIX shell for
+  the one-shot recipe; direct local `python audit.py ...` commands can also run
+  from PowerShell.
 
 The skill files are versioned distribution artifacts, so their `audit.py`
 download commands must use an immutable tag or commit SHA. Do not publish a
@@ -101,6 +105,10 @@ Post-publish verification:
 hermes skills list | grep api-relay-audit
 hermes chat --toolsets skills -q "Use the api-relay-audit skill to explain how to audit a relay without exposing my API key."
 ```
+
+Windows dogfood must also verify that Hermes can load the installed skill, not
+just install it. A successful direct install followed by a platform-gated
+`skill_view` failure is a distribution bug.
 
 ## Search Positioning
 
