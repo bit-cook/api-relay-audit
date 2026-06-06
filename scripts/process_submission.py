@@ -336,6 +336,40 @@ def build_evidence_record(fields, issue_author, issue_number, now=None):
     }
 
 
+def find_existing_evidence_index(evidence_data, entry):
+    """Find an existing candidate for the same issue or report artifact hash."""
+    entry_issue = entry.get("issueNumber")
+    entry_hash = entry.get("reportHash", "")
+    entry_domain = normalize_domain(entry.get("relayDomain", ""))
+    for idx, existing in enumerate(evidence_data):
+        if not isinstance(existing, dict):
+            continue
+        existing_issue = existing.get("issueNumber")
+        if (
+            entry_issue is not None
+            and existing_issue == entry_issue
+            and existing.get("source") == entry.get("source")
+        ):
+            return idx
+        if (
+            entry_hash
+            and existing.get("reportHash") == entry_hash
+            and normalize_domain(_entry_domain(existing)) == entry_domain
+        ):
+            return idx
+    return None
+
+
+def upsert_evidence_record(evidence_data, entry):
+    """Insert or replace one evidence record without duplicating reruns."""
+    existing_idx = find_existing_evidence_index(evidence_data, entry)
+    if existing_idx is None:
+        return [*evidence_data, entry], "created"
+    updated = list(evidence_data)
+    updated[existing_idx] = entry
+    return updated, "updated"
+
+
 def main():
     body = os.environ.get("ISSUE_BODY", "")
     author = os.environ.get("ISSUE_AUTHOR", "")
@@ -374,15 +408,17 @@ def main():
         os.environ.get("PENDING_EVIDENCE_PRS_FILE", "")
     )
 
-    domain = normalize_domain(fields["relay_domain"])
-    if check_rate_limit(domain, evidence_data + pending_evidence_data):
+    entry = build_evidence_record(fields, author, issue_number)
+    evidence_branch = build_evidence_branch_name(entry["relayDomain"], issue_number)
+    existing_idx = find_existing_evidence_index(evidence_data, entry)
+
+    domain = entry["relayDomain"]
+    if existing_idx is None and check_rate_limit(domain, evidence_data + pending_evidence_data):
         print(f"RATE_LIMITED: {domain} has >= {MAX_SUBMISSIONS_PER_RELAY_24H} submissions in 24h")
         _set_output("status", "RATE_LIMITED")
         sys.exit(4)
 
-    entry = build_evidence_record(fields, author, issue_number)
-    evidence_branch = build_evidence_branch_name(entry["relayDomain"], issue_number)
-    evidence_data.append(entry)
+    evidence_data, upsert_action = upsert_evidence_record(evidence_data, entry)
 
     EVIDENCE_JSON.parent.mkdir(parents=True, exist_ok=True)
     EVIDENCE_JSON.write_text(
@@ -396,7 +432,11 @@ def main():
     _set_output("report_artifact_url", entry["reportArtifactUrl"])
     _set_output("tool_commit", entry["toolCommit"])
     _set_output("evidence_branch", evidence_branch)
-    print(f"SHAPE_VALID: staged evidence for {domain} (#{issue_number}) by @{author}")
+    _set_output("evidence_action", upsert_action)
+    print(
+        f"SHAPE_VALID: {upsert_action} evidence for {domain} "
+        f"(#{issue_number}) by @{author}"
+    )
     print("Publication requires maintainer review via PR; no direct master push.")
 
 

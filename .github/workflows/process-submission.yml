@@ -15,7 +15,11 @@ concurrency:
 
 jobs:
   process:
-    if: contains(github.event.issue.labels.*.name, 'audit-submission')
+    if: >
+      (github.event.action == 'opened' &&
+       contains(github.event.issue.labels.*.name, 'audit-submission')) ||
+      (github.event.action == 'labeled' &&
+       github.event.label.name == 'audit-submission')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -184,7 +188,14 @@ jobs:
             exit 0
           fi
           git commit -m "Add community evidence: ${RELAY_DOMAIN} (#${ISSUE_NUMBER})"
-          git push --force-with-lease origin "${BRANCH}"
+          REMOTE_SHA="$(git ls-remote --heads origin "${BRANCH}" | awk '{print $1}')"
+          if [ -n "${REMOTE_SHA}" ]; then
+            git push \
+              --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" \
+              origin "HEAD:${BRANCH}"
+          else
+            git push --force-with-lease origin "HEAD:${BRANCH}"
+          fi
           cat > /tmp/evidence-pr-body.md <<EOF
           ## Summary
 

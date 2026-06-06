@@ -16,9 +16,11 @@ from process_submission import (  # noqa: E402
     evidence_needs_staleness_review,
     extract_artifact_url,
     extract_image_urls,
+    find_existing_evidence_index,
     load_pending_evidence_pr_entries,
     normalize_report_hash,
     parse_issue_body,
+    upsert_evidence_record,
     validate_fields,
 )
 
@@ -123,6 +125,35 @@ def test_build_evidence_record():
     assert len(entry["redFlags"]) == 2
     assert len(entry["reportImages"]) == 1
     assert entry["reportImages"][0] != entry["reportArtifactUrl"]
+
+
+def test_upsert_evidence_record_replaces_same_issue():
+    fields = parse_issue_body(SAMPLE_BODY)
+    original = build_evidence_record(fields, "testuser", "42")
+    updated_fields = parse_issue_body(_make_body(overall_rating="MEDIUM"))
+    updated = build_evidence_record(updated_fields, "testuser", "42")
+
+    data, action = upsert_evidence_record([original], updated)
+
+    assert action == "updated"
+    assert len(data) == 1
+    assert data[0]["issueNumber"] == 42
+    assert data[0]["toolReportedOverallRating"] == "MEDIUM"
+
+
+def test_upsert_evidence_record_replaces_same_domain_report_hash():
+    fields = parse_issue_body(SAMPLE_BODY)
+    original = build_evidence_record(fields, "testuser", "42")
+    duplicate_fields = parse_issue_body(_make_body(relay_domain="API.Example.COM."))
+    duplicate = build_evidence_record(duplicate_fields, "other-user", "99")
+
+    assert find_existing_evidence_index([original], duplicate) == 0
+    data, action = upsert_evidence_record([original], duplicate)
+
+    assert action == "updated"
+    assert len(data) == 1
+    assert data[0]["issueNumber"] == 99
+    assert data[0]["relayDomain"] == "api.example.com"
 
 
 def test_check_account_age():
@@ -532,6 +563,43 @@ def test_main_creates_evidence_json(tmp_path, monkeypatch):
     assert "report_artifact_url=https://github.com/user-attachments/files/123/report-redacted.md" in output
     assert "tool_commit=040676c" in output
     assert "evidence_branch=community/evidence-api.example.com-issue-1" in output
+    assert "evidence_action=created" in output
+
+
+def test_main_rerun_updates_existing_evidence_without_duplicate(tmp_path, monkeypatch):
+    import process_submission as mod
+
+    fake_evidence = tmp_path / "web" / "data" / "evidence.json"
+    output_file = tmp_path / "github-output.txt"
+    monkeypatch.setattr(mod, "EVIDENCE_JSON", fake_evidence)
+
+    old_fields = parse_issue_body(_make_body(overall_rating="HIGH"))
+    old_entry = build_evidence_record(old_fields, "testbot", "1")
+    fake_evidence.parent.mkdir(parents=True, exist_ok=True)
+    fake_evidence.write_text(
+        json.dumps([old_entry], ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv(
+        "ISSUE_BODY",
+        _make_body(
+            overall_rating="MEDIUM",
+            tested_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    monkeypatch.setenv("ISSUE_AUTHOR", "testbot")
+    monkeypatch.setenv("ISSUE_NUMBER", "1")
+    monkeypatch.setenv("AUTHOR_CREATED_AT", "2020-01-01T00:00:00Z")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+
+    mod.main()
+
+    data = json.loads(fake_evidence.read_text(encoding="utf-8"))
+    assert len(data) == 1
+    assert data[0]["issueNumber"] == 1
+    assert data[0]["toolReportedOverallRating"] == "MEDIUM"
+    assert "evidence_action=updated" in output_file.read_text(encoding="utf-8")
 
 
 def test_main_routes_stale_evidence_to_review_without_writing(tmp_path, monkeypatch):
@@ -567,6 +635,12 @@ def test_workflow_uses_draft_evidence_pr_contract():
     assert "gh pr edit" in workflow
     assert "gh pr create" in workflow
     assert "--draft" in workflow
+    assert "github.event.action == 'opened'" in workflow
+    assert "github.event.action == 'labeled'" in workflow
+    assert "github.event.label.name == 'audit-submission'" in workflow
+    assert "contains(github.event.issue.labels.*.name, 'audit-submission')" in workflow
+    assert 'git ls-remote --heads origin "${BRANCH}"' in workflow
+    assert '--force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}"' in workflow
     assert "web/data/evidence.json" in workflow
     assert "web/data/relays.json" not in workflow
     for forbidden in [
