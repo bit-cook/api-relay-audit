@@ -4,8 +4,8 @@
 # Regenerate after modular audit changes with:
 #   python3 scripts/build-standalone.py
 # CI verifies this generated artifact plus key behavior regressions.
-# source_sha256: 7093e3f6beef3fa742fa52a9b4e3223bd0534661fd2f90acb90974eb913a87d7
-# standalone_body_sha256: 664a23e101a5b0f598a3273e97911cc3a3b13da975c105afb7882cd6ff177640
+# source_sha256: 57cc4ddc3ccb3ed54e76e82dfc447c6e21322c2c03ab804625924e7ec655f245
+# standalone_body_sha256: 3adf747824d6eeb9df837a1e6ae8fd6fe5aa861c57b6a422b9367e52ee0c630f
 # END GENERATED STANDALONE HEADER
 
 """
@@ -13,7 +13,8 @@ API Relay Security Audit Tool v2.3 --- Standalone Edition
 
 Generated curl-only artifact for users who want:
 
-  curl -sO https://raw.githubusercontent.com/toby-bridges/api-relay-audit/master/audit.py
+  AUDIT_SCRIPT_REF=v2.3.0
+  curl -fsSL "https://raw.githubusercontent.com/toby-bridges/api-relay-audit/${AUDIT_SCRIPT_REF}/audit.py" -o audit.py
   python audit.py --key YOUR_KEY --url https://relay.example.com/v1
 
 The detection semantics below are generated from the modular source files
@@ -4896,12 +4897,12 @@ def parse_args():
     p.add_argument("--profile", choices=["general", "web3", "full"],
                    default="general",
                    help="Audit profile selector. 'general' (default) runs "
-                        "Steps 1-10 — suitable for regular API relay users. "
+                        "all non-Web3 relay checks; Step 11 is profile-gated. "
                         "'web3' adds Web3-specific checks (Step 11 prompt "
                         "injection targeting private keys / transaction "
                         "signing / transfer guidance) for wallet users. "
-                        "'full' enables everything including future web3 "
-                        "steps. Profile gating allows the same tool to serve "
+                        "'full' runs all available checks. Profile gating "
+                        "allows the same tool to serve "
                         "both general and Web3 audiences without branch splits.")
     p.add_argument("--skip-web3-injection", action="store_true",
                    help="Skip Step 11 Web3 prompt injection probes (only "

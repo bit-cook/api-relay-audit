@@ -140,13 +140,21 @@ def display_version_from_file() -> str:
     return f"v{major}.{minor}.{patch}"
 
 
+def release_tag_from_file() -> str:
+    version = read(VERSION_FILE).strip()
+    if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version):
+        raise SystemExit(f"VERSION must be MAJOR.MINOR.PATCH SemVer: {version!r}")
+    return f"v{version}"
+
+
 def standalone_doc() -> str:
     return f'''"""
 API Relay Security Audit Tool {display_version_from_file()} --- Standalone Edition
 
 Generated curl-only artifact for users who want:
 
-  curl -sO https://raw.githubusercontent.com/toby-bridges/api-relay-audit/master/audit.py
+  AUDIT_SCRIPT_REF={release_tag_from_file()}
+  curl -fsSL "https://raw.githubusercontent.com/toby-bridges/api-relay-audit/${{AUDIT_SCRIPT_REF}}/audit.py" -o audit.py
   python audit.py --key YOUR_KEY --url https://relay.example.com/v1
 
 The detection semantics below are generated from the modular source files

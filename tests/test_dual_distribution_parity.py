@@ -428,6 +428,11 @@ def test_standalone_ensure_format_real_body_detects_anthropic(monkeypatch):
 
 
 def _help_option_set(path):
+    text = _help_text(path)
+    return set(re.findall(r"--[a-z0-9-]+", text))
+
+
+def _help_text(path):
     result = subprocess.run(
         [sys.executable, str(path), "--help"],
         cwd=str(REPO_ROOT),
@@ -436,7 +441,7 @@ def _help_option_set(path):
         timeout=10,
         check=True,
     )
-    return set(re.findall(r"--[a-z0-9-]+", result.stdout))
+    return result.stdout
 
 
 def test_public_help_flags_parity():
@@ -446,6 +451,22 @@ def test_public_help_flags_parity():
     standalone_flags = _help_option_set(REPO_ROOT / "audit.py")
     assert "--connectivity" in modular_flags
     assert modular_flags == standalone_flags
+
+
+def test_profile_help_matches_current_14_step_contract():
+    """The profile selector should describe the shipped 14-step runtime.
+
+    Regression: after Steps 12-14 shipped, the help text still said general
+    only ran the first ten steps and full enabled future Web3 checks.
+    """
+    for path in [REPO_ROOT / "scripts" / "audit.py", REPO_ROOT / "audit.py"]:
+        text = _help_text(path)
+        normalized = " ".join(text.split())
+        assert "Steps 1-10" not in text
+        assert "future web3" not in text.lower()
+        assert "non-Web3 relay checks" in normalized
+        assert "Step 11 is profile-gated" in normalized
+        assert "'full' runs all available checks" in normalized
 
 
 def test_connectivity_mode_exits_before_full_audit(monkeypatch, tmp_path):

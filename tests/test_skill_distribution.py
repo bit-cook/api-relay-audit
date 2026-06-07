@@ -75,10 +75,20 @@ def test_versioned_skill_artifacts_pin_audit_script_download():
         text = _read(path)
         assert VERSION_TAG in text
         assert "master/audit.py" not in text
+        assert "blob/master" not in text
 
     distribution_doc = _read(SKILL_DISTRIBUTION_DOC)
     assert VERSION_TAG in distribution_doc
     assert "Do not publish a\nversioned skill that downloads mutable `master/audit.py`" in distribution_doc
+
+
+def test_release_notes_include_public_verification_contract():
+    text = _read(RELEASE_DRAFT)
+    assert "TO_BE_REGENERATED" not in text
+    assert "SEO/GEO" not in text
+    assert re.search(r"Standalone `audit\.py` SHA-256: `[0-9a-f]{64}`", text)
+    assert "/releases/latest" in text
+    assert f"/releases/tags/{VERSION_TAG}" in text
 
 
 def test_skill_surfaces_do_not_regress_to_13_step_copy():
@@ -176,6 +186,18 @@ def test_root_skill_secret_handling_prefers_secure_environment():
     assert "API_RELAY_AUDIT_KEY" in text
     assert "The agent may also ask the user directly" not in text
     assert "avoid repeating the raw key in chat" in text
+
+
+def test_root_skill_does_not_certify_green_results_as_safe():
+    text = _read(ROOT_SKILL)
+    forbidden = [
+        "use freely",
+        "Safe for general use",
+        "可放心使用",
+    ]
+    for phrase in forbidden:
+        assert phrase not in text
+    assert "not a safety certification" in text
 
 
 def test_hermes_skill_supports_windows_git_bash_contract():

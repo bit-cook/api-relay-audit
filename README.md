@@ -47,7 +47,8 @@ The canonical contract lives in [docs/query-families.md](./docs/query-families.m
 ## Quick Start
 
 ```bash
-curl -sO https://raw.githubusercontent.com/toby-bridges/api-relay-audit/master/audit.py
+AUDIT_SCRIPT_REF=v2.3.0
+curl -fsSL "https://raw.githubusercontent.com/toby-bridges/api-relay-audit/${AUDIT_SCRIPT_REF}/audit.py" -o audit.py
 
 python audit.py --key <YOUR_KEY> --url <BASE_URL> --output report.md
 
@@ -56,6 +57,7 @@ python audit.py --key <YOUR_KEY> --url <BASE_URL> --profile web3 --output report
 ```
 
 See a public-safe fixture report: [sanitized audit report](./docs/examples/sanitized-audit-report.md).
+Use `master` as `AUDIT_SCRIPT_REF` only when intentionally testing unreleased changes.
 
 ## Coverage
 
@@ -140,7 +142,7 @@ Community evidence is shape-checked by GitHub Actions, but publication still req
 | Version | `v2.3` |
 | Audit steps | 14 |
 | Risk matrix | 6D |
-| pytest collected tests | 764 |
+| pytest collected tests | 778 |
 | CLI flags | 21 |
 | Runtime profiles | `general`, `web3`, `full` |
 
@@ -263,7 +265,8 @@ to one behavior or document.
 ## 30 秒快速开始
 
 ```bash
-curl -sO https://raw.githubusercontent.com/toby-bridges/api-relay-audit/master/audit.py
+AUDIT_SCRIPT_REF=v2.3.0
+curl -fsSL "https://raw.githubusercontent.com/toby-bridges/api-relay-audit/${AUDIT_SCRIPT_REF}/audit.py" -o audit.py
 
 python audit.py --key <YOUR_KEY> --url <BASE_URL> --output report.md
 
@@ -325,7 +328,7 @@ API Relay Audit 也可以作为 agent skill 使用。
 | 版本 | `v2.3` |
 | 审计步骤 | 14 |
 | 风险矩阵 | 6D |
-| pytest collected tests | 764 |
+| pytest collected tests | 778 |
 | CLI flags | 21 |
 | Runtime profiles | `general`, `web3`, `full` |
 

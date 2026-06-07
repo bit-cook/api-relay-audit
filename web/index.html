@@ -383,7 +383,7 @@ footer a:hover{color:var(--text)}
   <div class="hero-stats">
     <div class="stat"><div class="stat-num">14</div><div class="stat-label" data-i18n="stat_steps">Audit Steps</div></div>
     <div class="stat"><div class="stat-num">6D</div><div class="stat-label" data-i18n="stat_matrix">Risk Matrix</div></div>
-    <div class="stat"><div class="stat-num">775</div><div class="stat-label" data-i18n="stat_tests">Unit Tests</div></div>
+    <div class="stat"><div class="stat-num">778</div><div class="stat-label" data-i18n="stat_tests">Unit Tests</div></div>
     <div class="stat"><div class="stat-num">0</div><div class="stat-label" data-i18n="stat_deps">Dependencies (standalone)</div></div>
   </div>
   <div class="hero-cta">
@@ -600,7 +600,7 @@ footer a:hover{color:var(--text)}
 <!-- ── Demo Report ── -->
 <section class="demo-section container" id="demo">
   <h2 data-i18n="demo_title">Audit Report Demo</h2>
-  <p class="demo-subtitle" data-i18n="demo_sub">Real audit results from three relay services — click tabs to compare</p>
+  <p class="demo-subtitle" data-i18n="demo_sub">Redacted report examples from relay audits — click tabs to compare</p>
 
   <div class="demo-tabs">
     <button class="demo-tab active" onclick="showDemo(0)" data-rating="red"><span data-i18n="demo_tab_high">High Risk</span> — example1.com</button>
@@ -609,7 +609,7 @@ footer a:hover{color:var(--text)}
   </div>
 
   <div id="demo-cards"></div>
-  <p class="demo-note" data-i18n="demo_note">Domain names redacted. Data from actual audits run with api-relay-audit.</p>
+  <p class="demo-note" data-i18n="demo_note">Domain names and sensitive details redacted; examples preserve the report shape without publishing raw relay traffic.</p>
 </section>
 
 <!-- ── How It Works ── -->
@@ -988,14 +988,15 @@ function generateCmd(){
   if(!url){document.getElementById('f-url').focus();return}
   if(!key){document.getElementById('f-key').focus();return}
   const win=isWindows();
+  const scriptRef='v2.3.0';
   let cmd;
   if(win){
     // PowerShell: Invoke-WebRequest, semicolon, single-quote escaping via doubling
     const psKey=key.replace(/'/g,"''");
     const psUrl=url.replace(/'/g,"''");
-    cmd=`Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/toby-bridges/api-relay-audit/master/audit.py' -OutFile audit.py; python audit.py --key '${psKey}' --url '${psUrl}' --model ${model}`;
+    cmd=`$env:AUDIT_SCRIPT_REF='${scriptRef}'; Invoke-WebRequest -Uri \"https://raw.githubusercontent.com/toby-bridges/api-relay-audit/$env:AUDIT_SCRIPT_REF/audit.py\" -OutFile audit.py; python audit.py --key '${psKey}' --url '${psUrl}' --model ${model}`;
   } else {
-    cmd=`curl -sO https://raw.githubusercontent.com/toby-bridges/api-relay-audit/master/audit.py && python3 audit.py --key ${shellEscape(key)} --url ${shellEscape(url)} --model ${model}`;
+    cmd=`AUDIT_SCRIPT_REF=${scriptRef} && curl -fsSL \"https://raw.githubusercontent.com/toby-bridges/api-relay-audit/\${AUDIT_SCRIPT_REF}/audit.py\" -o audit.py && python3 audit.py --key ${shellEscape(key)} --url ${shellEscape(url)} --model ${model}`;
   }
   const el=document.getElementById('cmd-output');
   el.setAttribute('data-cmd',cmd);
@@ -1161,9 +1162,9 @@ const i18n={
     family_web3_desc:"Use the profile-gated Step 11 checks with --profile web3 or --profile full before wallet-sensitive agent workflows.",
     stat_steps:"Audit Steps",stat_matrix:"Risk Matrix",stat_tests:"Unit Tests",stat_deps:"Dependencies (standalone)",
     cta_demo:"See Demo Report",cta_install:"Start Audit",
-    demo_title:"Audit Report Demo",demo_sub:"Real audit results from three relay services — click tabs to compare",
+    demo_title:"Audit Report Demo",demo_sub:"Redacted report examples from relay audits — click tabs to compare",
     demo_tab_high:"High Risk",demo_tab_mid:"Medium Risk",demo_tab_low:"Low Risk",
-    demo_note:"Domain names redacted. Data from actual audits run with api-relay-audit.",
+    demo_note:"Domain names and sensitive details redacted; examples preserve the report shape without publishing raw relay traffic.",
     demo_date:"Test date",demo_no_inject:"No injection",demo_extracted:"extracted",demo_risk_items:"Risk Items",
     demo_th_step:"Test",demo_th_result:"Result",demo_th_detail:"Detail",
     how_title:"Detect Prompt Injection and Model Substitution Signals",

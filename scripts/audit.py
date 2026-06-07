@@ -127,12 +127,12 @@ def parse_args():
     p.add_argument("--profile", choices=["general", "web3", "full"],
                    default="general",
                    help="Audit profile selector. 'general' (default) runs "
-                        "Steps 1-10 — suitable for regular API relay users. "
+                        "all non-Web3 relay checks; Step 11 is profile-gated. "
                         "'web3' adds Web3-specific checks (Step 11 prompt "
                         "injection targeting private keys / transaction "
                         "signing / transfer guidance) for wallet users. "
-                        "'full' enables everything including future web3 "
-                        "steps. Profile gating allows the same tool to serve "
+                        "'full' runs all available checks. Profile gating "
+                        "allows the same tool to serve "
                         "both general and Web3 audiences without branch splits.")
     p.add_argument("--skip-web3-injection", action="store_true",
                    help="Skip Step 11 Web3 prompt injection probes (only "
